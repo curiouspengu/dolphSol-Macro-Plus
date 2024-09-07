@@ -34,7 +34,7 @@ CoordMode, Mouse, Screen
 #Include *i jxon.ahk
 #Include *i ItemScheduler.ahk
 
-global version := "v1.5.0"
+global version := "v1.5.0+"
 
 if (RegExMatch(A_ScriptDir,"\.zip") || IsFunc("ocr") = 0) {
     ; File is not extracted or not saved with other necessary files
@@ -420,7 +420,7 @@ updateStaticData() {
         options.LastAnnouncement := getUnixTime()
     }
 
-    if (officialVersion && officialVersion != currentVersion && officialVersion != latestBeta) {
+    if (officialVersion && officialVersion != currentVersion && currentVersion != latestBeta) {
         updateMessage := officialData.updateInfo.updateNotes
     } else {
         return

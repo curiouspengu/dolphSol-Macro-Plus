@@ -1,7 +1,6 @@
-
 settings/config.ini
 /settings
-lib/macro_log.txt
-lib/macro_status_log.txt
+/lib/macro_log.txt
+/lib/macro_status_log.txt
 macro_log.txt
 macro_status_log.txt
