@@ -20,5 +20,5 @@ dolphSol has a couple of different features it is capable of. These include:
 
 This "Plus" version (so far) includes
  - Aura Recordings 
-
- Discord Server: https://discord.gg/DYUqwJchuV
+People join the Discord server for issues. 
+Discord Server: https://discord.gg/DYUqwJchuV
