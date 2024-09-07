@@ -420,7 +420,7 @@ updateStaticData() {
         options.LastAnnouncement := getUnixTime()
     }
 
-    if (officialVersion && officialVersion != currentVersion && currentVersion != latestBeta) {
+    if (officialVersion && officialVersion != version && version != latestBeta) {
         updateMessage := officialData.updateInfo.updateNotes
     } else {
         return
