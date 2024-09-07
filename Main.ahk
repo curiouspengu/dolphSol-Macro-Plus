@@ -34,7 +34,7 @@ CoordMode, Mouse, Screen
 #Include *i jxon.ahk
 #Include *i ItemScheduler.ahk
 
-global version := "v1.5.0+"
+global version := "v1.5.1+ Beta"
 
 if (RegExMatch(A_ScriptDir,"\.zip") || IsFunc("ocr") = 0) {
     ; File is not extracted or not saved with other necessary files
