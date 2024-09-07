@@ -406,7 +406,7 @@ updateStaticData() {
 
         officialData := Jxon_Load(content)[1]
         officialVersion := officialData.updateInfo.latestVersion
-        latestBeta := officialData.updateInfo.latestBeta
+        officialBeta := officialData.updateInfo.latestBeta
     }
 
     if (content == "") {
@@ -421,7 +421,7 @@ updateStaticData() {
         options.LastAnnouncement := getUnixTime()
     }
 
-    if (officialVersion && officialVersion != version && version != latestBeta) {
+    if (officialVersion && officialVersion != version && version != officialBeta) {
         updateMessage := officialData.updateInfo.updateNotes
     } else {
         return

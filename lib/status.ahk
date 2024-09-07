@@ -727,6 +727,7 @@ isColorWhite(c){
 
 recordAura()
 {
+    Sleep, 4000
     SendInput {LWin down}{Alt down}{g down}{LWin up}{Alt up}{g up}
 }
 

@@ -2,7 +2,7 @@
     "announcement":"",
     "updateInfo": {
         "latestVersion":"v1.5.0+",
-        "latesBeta": "v1.5.1+ Beta",
+        "latestBeta": "v1.5.1+ Beta",
         "versionLink":"https://github.com/curiouspengu/dolphSol-Macro/releases/latest",
         "updateNotes":""
     },
