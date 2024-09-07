@@ -1,8 +1,9 @@
 [{
-    "announcement":"v1.4.0 has fully released! Please remember to have your camera mode on the default option before starting the macro.",
+    "announcement":"",
     "updateInfo": {
-        "latestVersion":"v1.5.0",
-        "versionLink":"https://github.com/BuilderDolphin/dolphSol-Macro/releases/latest",
+        "latestVersion":"v1.5.0+",
+        "latesBeta": "",
+        "versionLink":"https://github.com/curiouspengu/dolphSol-Macro/releases/latest",
         "updateNotes":"- v1.5.0 is currently in testing, so the auto update will show this. The test/unnoficial versions are currently on Discord."
     },
     "biomes": ["Windy", "Rainy", "Snowy", "Hell", "Starfall", "Corruption", "Null", "Glitched"],

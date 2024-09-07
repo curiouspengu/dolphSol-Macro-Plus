@@ -209,7 +209,10 @@ global options := {"DoingObby":1
     ,"Disconnects":0
     ,"ObbyCompletes":0
     ,"ObbyAttempts":0
-    ,"CollectionLoops":0}
+    ,"CollectionLoops":0
+
+    ; plus options
+    ,"RecordAura":0}
 
 global privateServerPre := "https://www.roblox.com/games/15532962292/Sols-RNG?privateServerLinkCode="
 
@@ -393,7 +396,7 @@ getURLContent(url) {
 }
 
 updateStaticData() {
-    updateURL := "https://raw.githubusercontent.com/BuilderDolphin/dolphSol-Macro/main/lib/staticData.json"
+    updateURL := "https://raw.githubusercontent.com/curiouspengu/dolphSol-Macro-plus/main/lib/staticData.json"
 
     content := getURLContent(updateURL)
     if (content != "") {
@@ -402,6 +405,7 @@ updateStaticData() {
 
         officialData := Jxon_Load(content)[1]
         officialVersion := officialData.updateInfo.latestVersion
+        latestBeta := officialData.updateInfo.latestBeta
     }
 
     if (content == "") {
@@ -416,7 +420,7 @@ updateStaticData() {
         options.LastAnnouncement := getUnixTime()
     }
 
-    if (officialVersion && officialVersion != currentVersion) {
+    if (officialVersion && officialVersion != currentVersion && officialVersion != latestBeta) {
         updateMessage := officialData.updateInfo.updateNotes
     } else {
         return
@@ -429,7 +433,7 @@ updateStaticData() {
 
     options.FirstTime := 0
     vLink := sData.updateInfo.versionLink
-    Run % (vLink ? vLink : "https://github.com/BuilderDolphin/dolphSol-Macro/releases/latest")
+    Run % (vLink ? vLink : "https://github.com/curiouspengu/dolphSol-Macro/releases/latest")
     ExitApp
 }
 
@@ -969,6 +973,11 @@ resetZoom(){
         Click, WheelUp
         Sleep, 50
     }
+
+    Click, Right Down
+    MouseMove, A_ScreenWidth // 2, A_ScreenHeight
+    Click, Right Up
+
     Loop 10 {
         Click, WheelDown
         Sleep, 50
@@ -2707,7 +2716,7 @@ mainLoop(){
         }
         if (!hasBuff)
         {
-            ; align()
+            align()
             updateStatus("Obby Failed, Retrying")
             lastObby := A_TickCount - obbyCooldown*1000
             obbyRun()
@@ -2740,7 +2749,7 @@ mainLoop(){
 CreateMainUI() {
     global
 
-; main ui
+    ; main ui
     try {
         Menu Tray, Icon, % mainDir "images\dSM.ico" ; Use icon if available
     } catch {
@@ -2756,7 +2765,7 @@ CreateMainUI() {
     Gui Font, s11 Norm, Segoe UI
     Gui Add, Picture, gDiscordServerClick w26 h20 x462 y226, % mainDir "images\discordIcon.png"
 
-    Gui Add, Tab3, vMainTabs x8 y8 w484 h210 +0x800000, Main|Crafting|Status|Settings|Credits|Extras
+    Gui Add, Tab3, vMainTabs x8 y8 w484 h210 +0x800000, Main|Crafting|Webhook|Settings|Credits|Extras|Plus
 
     ; main tab
     Gui Tab, 1
@@ -2959,6 +2968,13 @@ CreateMainUI() {
     GuiControl,, RobloxUpdatedUIRadio1, % (options["RobloxUpdatedUI"] = 1) ? 1 : 0
     GuiControl,, RobloxUpdatedUIRadio2, % (options["RobloxUpdatedUI"] = 2) ? 1 : 0
 
+    ; plus features
+    Gui Tab, 7
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y40 w467 h50 vRecordAuraGroup -Theme +0x50000007, Record Aura
+
+
+
     Gui Show, % "w500 h254 x" clamp(options.WindowX,10,A_ScreenWidth-100) " y" clamp(options.WindowY,10,A_ScreenHeight-100), % "dolphSol Macro " version
 
     ; status bar
@@ -2968,6 +2984,7 @@ CreateMainUI() {
 
     Gui mainUI:Default
 }
+
 CreateMainUI()
 
 ; Create the Aura settings popup

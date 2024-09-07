@@ -809,6 +809,7 @@ rollDetection(bypass := 0,is1m := 0,starMap := 0,originalCorners := 0){
         handleRollPost(bypass,auraInfo,starMap,originalCorners)
         Sleep, 6000
         rareDisplaying := 0
+        ; Add game bar option
     } else if (rareDisplaying >= 2){
         auraInfo := getAuraInfo(bypass,originalCorners[4],0,is1m)
         if ((auraInfo.rarity >= 99999) && (auraInfo.rarity < 1000000)){
@@ -818,6 +819,11 @@ rollDetection(bypass := 0,is1m := 0,starMap := 0,originalCorners := 0){
         handleRollPost(bypass,auraInfo,starMap,originalCorners)
         rareDisplaying := 0
     }
+}
+
+recordAura()
+{
+    
 }
 
 SystemCursor(OnOff=1)   ; INIT = "I","Init"; OFF = 0,"Off"; TOGGLE = -1,"T","Toggle"; ON = others
