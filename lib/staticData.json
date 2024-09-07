@@ -3,7 +3,7 @@
     "updateInfo": {
         "latestVersion":"v1.5.0+",
         "latestBeta": "v1.5.1+ Beta",
-        "versionLink":"https://github.com/curiouspengu/dolphSol-Macro/releases/latest",
+        "versionLink":"https://github.com/curiouspengu/dolphSol-Macro-Plus/releases",
         "updateNotes":""
     },
     "biomes": ["Windy", "Rainy", "Snowy", "Hell", "Starfall", "Corruption", "Null", "Glitched"],

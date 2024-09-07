@@ -397,7 +397,7 @@ getURLContent(url) {
 }
 
 updateStaticData() {
-    updateURL := "https://raw.githubusercontent.com/curiouspengu/dolphSol-Macro-plus/main/lib/staticData.json"
+    updateURL := "https://raw.githubusercontent.com/curiouspengu/dolphSol-Macro-Plus/main/lib/staticData.json"
 
     content := getURLContent(updateURL)
     if (content != "") {
@@ -434,7 +434,7 @@ updateStaticData() {
 
     options.FirstTime := 0
     vLink := sData.updateInfo.versionLink
-    Run % (vLink ? vLink : "https://github.com/curiouspengu/dolphSol-Macro/releases/latest")
+    Run % (vLink ? vLink : "https://github.com/curiouspengu/dolphSol-Macro-Plus")
     ExitApp
 }
 
@@ -2940,7 +2940,7 @@ CreateMainUI() {
     Gui Font, s10 w600
     Gui Add, GroupBox, x252 y130 w231 h80 vCreditsGroup3 -Theme +0x50000007, Other
     Gui Font, s9 norm
-    Gui Add, Link, x268 y150 w200 h55, Join the <a href="https://discord.gg/DYUqwJchuV">Discord Server</a>! (Community)`n`nVisit the <a href="https://github.com/BuilderDolphin/dolphSol-Macro">GitHub</a>! (Updates + Versions)
+    Gui Add, Link, x268 y150 w200 h55, Join the <a href="https://discord.gg/DYUqwJchuV">Discord Server</a>! (Community)`n`nVisit the <a href="https://github.com/curiouspengu/dolphSol-Macro-Plus">GitHub</a>! (Updates + Versions)
 
     ; advanced tab
     Gui Tab, 6

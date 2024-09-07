@@ -1,5 +1,6 @@
-# dolphSol Macro
+# dolphSol Macro Plus
  A macro for the Roblox game "Sol's RNG", including features such as obby completion and item collection. A work in progress - BuilderDolphin
+ This "Plus" version fixes many existing issues and introduces many community requested features. A word in progress - Curious Pengu
 
  ## Installation
  - First of all, you need to download [AutoHotKey v1.1](https://www.autohotkey.com/) (Not 2.0), and run the installer
@@ -16,5 +17,8 @@ dolphSol has a couple of different features it is capable of. These include:
  - Reconnecting upon disconnect
  - Setting for the VIP gamepass to compensate for the increased WalkSpeed
  - Settings importing, useful for updates
+
+This "Plus" version (so far) includes
+ - Aura Recordings 
 
  Discord Server: https://discord.gg/DYUqwJchuV
