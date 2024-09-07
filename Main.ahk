@@ -10,27 +10,58 @@
 ;   
 ;   Feel free to provide any suggestions (through discord preferably, @builderdolphin). 
 
-#singleinstance, force
-#noenv
-#persistent
+#Requires AutoHotkey v1.1+ 64-bit
+#SingleInstance, force
+#NoEnv
+#Persistent
+SetBatchLines, -1
+
+
+global loggingEnabled := 1 ; Debug logging to file, disabled for public to prevent storage overload, change to 1 to enable
+
+
+OnError("LogError")
+OnMessage(0x4a, "ReceiveFromStatus")
+
 SetWorkingDir, % A_ScriptDir "\lib"
 CoordMode, Pixel, Screen
 CoordMode, Mouse, Screen
 
-if (RegExMatch(A_ScriptDir,"\.zip")){
-    MsgBox, 0, % "Running From ZIP", % "You are attempting to run the script from a ZIP file.`n`nPlease Extract/Unzip the file first, then run the script in the extracted folder."
+#Include *i %A_ScriptDir%\lib
+#Include *i ocr.ahk
+#Include *i Gdip_All.ahk
+#Include *i Gdip_ImageSearch.ahk
+#Include *i jxon.ahk
+#Include *i ItemScheduler.ahk
+
+global version := "v1.5.0"
+
+if (RegExMatch(A_ScriptDir,"\.zip") || IsFunc("ocr") = 0) {
+    ; File is not extracted or not saved with other necessary files
+    MsgBox, 16, % "dolphSol Macro " version, % "Unable to access all necessary files to run correctly.`n"
+            . "Please make sure the macro folder is extracted by right clicking the downloaded file and choosing 'Extract All'."
     ExitApp
 }
 
-#Include %A_ScriptDir%\lib
-#Include ocr.ahk
-#Include Gdip_All.ahk
-#Include Gdip_ImageSearch.ahk
-#Include jxon.ahk
-
 Gdip_Startup()
 
-global version := "v1.4.0"
+; Run macro as admin to avoid issues with Roblox input
+full_command_line := DllCall("GetCommandLine", "str")
+if not (A_IsAdmin or RegExMatch(full_command_line, " /restart(?!\S)")) {
+    try {
+        RunWait, *RunAs "%A_AhkPath%" /restart "%A_ScriptFullPath%"
+    }
+}
+
+; TODO: change some of these to static variables
+global disableAlignment := false ; Toggle with F5
+global lastLoggedMessage := ""
+global delayMultiplier := 3 ; Delay multiplier for slower computers - Mainly for camera mode changes
+global auraNames := [] ; List of aura names for webhook pings
+global biomes := []
+global ItemSchedulerEntries := []  ; Initialize the array for item usage entries
+global StellaPortalDelay := 0 ; Extra wait time (ms) after entering portal before moving to cauldron - 1000ms = 1s
+global currentBiome := ""
 
 global robloxId := 0
 
@@ -48,10 +79,14 @@ lastObby := A_TickCount - obbyCooldown*1000
 hasObbyBuff := 0
 
 obbyStatusEffectColor := 0x9CFFAC
+craftingCompleteColor := 0x1C821A
 
 statusEffectSpace := 5
 
 global mainDir := A_ScriptDir "\"
+
+logMessage("") ; empty line for separation
+logMessage("Macro opened")
 
 configPath := mainDir . "settings\config.ini"
 global ssPath := "ss.jpg"
@@ -62,27 +97,33 @@ global camFollowMode := 0
 
 configHeader := "; dolphSol Settings`n;   Do not put spaces between equals`n;   Additions may break this file and the macro overall, please be cautious`n;   If you mess up this file, clear it entirely and restart the macro`n`n[Options]`r`n"
 
+global importantStatuses := {"Starting Macro":1
+    ,"Roblox Disconnected":1
+    ,"Reconnecting":1
+    ,"Reconnecting, Roblox Opened":0
+    ,"Reconnecting, Game Loaded":0
+    ,"Reconnect Complete":1
+    ,"Initializing":0
+    ,"Macro Stopped":1}
+
 global potionIndex := {0:"None"
     ,1:"Fortune Potion I"
     ,2:"Fortune Potion II"
     ,3:"Fortune Potion III"
     ,4:"Haste Potion I"
     ,5:"Haste Potion II"
-    ,6:"Heavenly Potion I"
-    ,7:"Heavenly Potion II"
-    ,8:"Universe Potion I"}
+    ,6:"Haste Potion III"
+    ,7:"Heavenly Potion I"
+    ,8:"Heavenly Potion II"}
 
-
-global craftingInfo := {"Gilded Coin":{slot:13,addSlots:1,maxes:[1],attempts:5,addedAttempts:1}
-    ,"Fortune Potion I":{slot:1,subSlot:1,addSlots:4,maxes:[5,1,5,1],attempts:2}
+global craftingInfo := {"Fortune Potion I":{slot:1,subSlot:1,addSlots:4,maxes:[5,1,5,1],attempts:2}
     ,"Fortune Potion II":{slot:1,subSlot:2,addSlots:5,maxes:[1,10,5,10,2],attempts:2}
     ,"Fortune Potion III":{slot:1,subSlot:3,addSlots:5,maxes:[1,15,10,15,5],attempts:2}
     ,"Haste Potion I":{slot:2,subSlot:1,addSlots:4,maxes:[10,5,10,1],attempts:2}
     ,"Haste Potion II":{slot:2,subSlot:2,addSlots:5,maxes:[1,10,10,15,2],attempts:2}
     ,"Haste Potion III":{slot:2,subSlot:3,addSlots:5,maxes:[1,20,15,25,4],attempts:2}
     ,"Heavenly Potion I":{slot:3,subSlot:1,addSlots:4,maxes:[100,50,20,1],attempts:2}
-    ,"Heavenly Potion II":{slot:3,subSlot:2,addSlots:5,maxes:[2,125,75,50,1],attempts:2}
-    ,"Universe Potion I":{slot:4,subSlot:1,addSlots:3,maxes:[10,15,2],attempts:2}}
+    ,"Heavenly Potion II":{slot:3,subSlot:2,addSlots:5,maxes:[2,125,75,50,1],attempts:2}}
 
 global rarityIndex := {0:"None"
     ,1:"1/1k+"
@@ -101,10 +142,11 @@ global reversePotionIndex := reverseIndices(potionIndex)
 global reverseRarityIndex := reverseIndices(rarityIndex)
 
 ; defaults
+global sData := {}
 global options := {"DoingObby":1
     ,"AzertyLayout":0
     ,"ArcanePath":0
-    ,"CheckObbyBuff":1
+    ,"CheckObbyBuff":0
     ,"CollectItems":1
     ,"ItemSpot1":1
     ,"ItemSpot2":1
@@ -120,29 +162,45 @@ global options := {"DoingObby":1
     ,"BackOffset":0
     ,"ReconnectEnabled":1
     ,"AutoEquipEnabled":0
+    ,"AutoEquipAura":""
     ,"AutoEquipX":-0.415
     ,"AutoEquipY":-0.438
     ,"PrivateServerId":""
+    ,"InOwnPrivateServer":1 ; Determines side button positions
     ,"WebhookEnabled":0
     ,"WebhookLink":""
     ,"WebhookImportantOnly":0
     ,"DiscordUserID":""
+    ,"DiscordGlitchID":"" ; Used in status.ahk for biome ping in Discord - Defaults to DiscordUserID if not set
     ,"WebhookRollSendMinimum":10000
     ,"WebhookRollPingMinimum":100000
     ,"WebhookAuraRollImages":0
     ,"StatusBarEnabled":0
     ,"WasRunning":0
     ,"FirstTime":0
-    ,"CraftingInterval":10
+    ,"InvScreenshotsEnabled":1
+    ,"LastInvScreenshot":0
+    ,"OCREnabled":0
+    ,"RestartRobloxEnabled":0
+    ,"RestartRobloxInterval":1
+    ,"LastRobloxRestart":0
+    ,"LastAnnouncement":0
+    ,"RobloxUpdatedUI":2 ; Default to "New"
+    ,"ClaimDailyQuests":0       ; Stewart
+    ,"SearchSpecialAuras":0     ; Stewart
+    ,"Shifter":0
+
+    ; Crafting
     ,"ItemCraftingEnabled":0
-    ,"CraftingGildedCoin":1
+    ,"CraftingInterval":10
+    ,"LastCraftSession":0
     ,"PotionCraftingEnabled":0
     ,"PotionCraftingSlot1":0
     ,"PotionCraftingSlot2":0
     ,"PotionCraftingSlot3":0
-    ,"LastCraftSession":0
-    ,"InvScreenshotsEnabled":1
-    ,"LastInvScreenshot":0
+    ,"PotionAutoAddEnabled":0
+    ,"PotionAutoAddInterval":10
+    ,"LastPotionAutoAdd":0
 
     ,"ExtraRoblox":0 ; mainly for me (builderdolphin) to run my 3rd acc on 2nd monitor, not used for anything else, not intended for public use unless yk what you're doing i guess
 
@@ -153,19 +211,137 @@ global options := {"DoingObby":1
     ,"ObbyAttempts":0
     ,"CollectionLoops":0}
 
-global sData := {}
-
 global privateServerPre := "https://www.roblox.com/games/15532962292/Sols-RNG?privateServerLinkCode="
+
+; Must be called in correct order
+loadData() ; Load config data
+updateStaticData() ; Get latest data for update check, aura names, etc.
+
+; Disable OCR mode if resolution isn't supported
+; Now enabling the mode will notify of requirements
+if (options.OCREnabled) {
+    getRobloxPos(pX, pY, pW, pH)
+    if not (pW = 1920 && pH = 1080 && A_ScreenDPI = 96) {
+        options.OCREnabled := 0
+    }
+}
+
+if (options.ItemCraftingEnabled) {
+    if (options.ItemCraftingEnabled = 1) {
+        options.ItemCraftingEnabled := 0
+    }
+}
+
+global currentLanguage := getCurrentLanguage() ; Get the current language for OCR check
+getCurrentLanguage() {
+    try {
+        hWnd := GetRobloxHWND() ? WinExist("ahk_id" . GetRobloxHWND()) : WinExist("A")
+        currentLanguage := GetInputLangName(GetInputLangID(hWnd))
+        logMessage("Current Language: " currentLanguage)
+        return currentLanguage
+    }
+    return "Unknown"
+}
+getOCRLanguages() {
+    ; Macro requires "en-US" to be installed for OCR library (as of 06/21/24)
+
+    languages := ocr("ShowAvailableLanguages")
+    if (!languages) {
+        logMessage("An error occurred while checking for OCR languages")
+        return 0
+    }
+
+    logMessage("OCR languages installed:")
+    logMessage(languages)
+    return languages
+
+    ; Check if the script is running as admin
+    if (!A_IsAdmin) {
+        logMessage("Main.ahk not running as admin")
+
+        MsgBox, 4, , % "You will need the 'English (United States)' language pack installed for enhanced functionality.`n`n"
+            . "Would you like to run this file as an administrator to attempt to install it automatically?"
+
+        IfMsgBox Yes
+            logMessage("Restarting Main.ahk as admin")
+            RunWait, *RunAs "%A_AhkPath%" /restart "%A_ScriptFullPath%"
+            return
+    } else {
+        logMessage("Main.ahk running as admin")
+
+        ; Give the option to auto install the language pack
+        MsgBox, 4, , % "You will need the 'English (United States)' language pack installed for enhanced functionality.`n`n"
+            . "Select 'No' to do it yourself through Settings > Time & Language > Language & Region > Add a language.`n"
+            . "Select 'Yes' to attempt to install it automatically.`n`n"
+            . "Both options will require you to log out and back in (or restart) to take effect."
+
+        IfMsgBox Yes
+            logMessage("Attempting to install the language pack")
+            try {
+                RunWait, *RunAs powershell.exe -ExecutionPolicy Bypass Install-Language en-US
+                ExitApp
+            } catch e {
+                logMessage("An error occurred while attempting to install the language pack")
+                logMessage(e, 1)
+                MsgBox, 16, Error, % "An error occurred while attempting to install the language pack.`n`n"
+                    . "Please install it manually through Settings > Time & Language > Language & Region > Add a language."
+            }
+    }
+}
+
+/*
+    Begin Language Functions
+
+    GetInputLangID(), GetInputLangName()
+    Last submitted by teadrinker 20 Sep 2020 at https://www.autohotkey.com/boards/viewtopic.php?style=17&p=353708&sid=4498caf4025f947e56ee1f190c7f2227#p353708
+*/
+GetInputLangID(hWnd) {
+   WinExist("ahk_id" . hWnd)
+   WinGet, processName, ProcessName
+   if (processName != "ApplicationFrameHost.exe") {
+      ControlGetFocus, focused
+      if !ErrorLevel
+         ControlGet, hWnd, hwnd,, % focused
+      threadId := DllCall("GetWindowThreadProcessId", "Ptr", hWnd, "Ptr", 0)
+   }
+   else {
+      WinGet, PID, PID
+      WinGet, controlList, ControlListHwnd
+      Loop, parse, controlList, `n
+         threadId := DllCall("GetWindowThreadProcessId", "Ptr", A_LoopField, "UIntP", childPID)
+      until childPID != PID
+   }
+   lyt := DllCall("GetKeyboardLayout", "Ptr", threadId, "UInt")
+   return langID := Format("{:#x}", lyt & 0x3FFF)
+}
+GetInputLangName(langId) {
+   static LOCALE_SENGLANGUAGE := 0x1001
+   charCount := DllCall("GetLocaleInfo", "UInt", langId, "UInt", LOCALE_SENGLANGUAGE, "UInt", 0, "UInt", 0)
+   VarSetCapacity(localeSig, size := charCount << !!A_IsUnicode, 0)
+   DllCall("GetLocaleInfo", "UInt", langId, "UInt", LOCALE_SENGLANGUAGE, "Str", localeSig, "UInt", size)
+   return localeSig
+}
+/*
+    End Language Functions
+*/
 
 getINIData(path){
     FileRead, retrieved, %path%
 
+    if (!retrieved){
+        logMessage("[getINIData] No data found in " path)
+        ; MsgBox, An error occurred while reading %path% data, please review the file.
+        return
+    }
+
     retrievedData := {}
     readingPoint := 0
 
-    if (!ErrorLevel){
-        ls := StrSplit(retrieved,"`r`n")
-        for i,v in ls {
+    ls := StrSplit(retrieved,"`n")
+    for i,v in ls {
+        ; Remove any carriage return characters
+        v := Trim(v, "`r")
+
             isHeader := RegExMatch(v,"\[(.*)]")
             if (v && readingPoint && !isHeader){
                 RegExMatch(v,"(.*)(?==)",index)
@@ -177,18 +353,14 @@ getINIData(path){
                 readingPoint := 1
             }
         }
-    } else {
-        MsgBox, An error occurred while reading %path% data, please review the file.
-        return
-    }
     return retrievedData
 }
 
 writeToINI(path,object,header){
-    if (!FileExist(path)){
-        MsgBox, You are missing the file: %path%, please ensure that it is in the correct location.
-        return
-    }
+    ; if (!FileExist(path)){
+    ;     MsgBox, You are missing the file: %path%, please ensure that it is in the correct location.
+    ;     return
+    ; }
 
     formatted := header
 
@@ -196,29 +368,159 @@ writeToINI(path,object,header){
         formatted .= i . "=" . v . "`r`n"
     }
 
-    FileDelete, %path%
+    if (FileExist(path)) {
+        FileDelete, %path%
+    }
     FileAppend, %formatted%, %path%
+}
+
+getURLContent(url) {
+    try {
+        WinHttp := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+        WinHttp.Open("GET", url, false)
+        WinHttp.SetRequestHeader("Cache-Control", "no-cache")
+        WinHttp.SetRequestHeader("Pragma", "no-cache")
+        WinHttp.Send()
+
+        If (WinHttp.Status = 200) {
+            return WinHttp.ResponseText
+        }
+
+        return ""
+    } catch {
+        return ""
+    }
+}
+
+updateStaticData() {
+    updateURL := "https://raw.githubusercontent.com/BuilderDolphin/dolphSol-Macro/main/lib/staticData.json"
+
+    content := getURLContent(updateURL)
+    if (content != "") {
+        FileDelete, staticData.json
+        FileAppend, %content%, staticData.json
+
+        officialData := Jxon_Load(content)[1]
+        officialVersion := officialData.updateInfo.latestVersion
+    }
+
+    if (content == "") {
+        MsgBox, 16, Update Check, % "Unable to check for update. Error: " . e.Message . "`nContinuing with current StaticData.json data.`nCheck your network connection and restart to try again."
+        return
+    }
+
+    ; Show Announcement once daily at most
+    sData := officialData
+    if (sData.announcement != "" && (getUnixTime() - options.LastAnnouncement >= 24*60*60*1000)) { ; 24hrs
+        MsgBox, 0, Macro Announcement, % sData.announcement
+        options.LastAnnouncement := getUnixTime()
+    }
+
+    if (officialVersion && officialVersion != currentVersion) {
+        updateMessage := officialData.updateInfo.updateNotes
+    } else {
+        return
+    }
+
+    uNotes := sData.updateInfo.updateNotes
+    MsgBox, 36, New Update Available, % "`nWould you like to head to the GitHub page to update your macro?" . (uNotes ? ("`n`nUpdate Notes:`n" . uNotes) : "")
+    IfMsgBox No
+        return
+
+    options.FirstTime := 0
+    vLink := sData.updateInfo.versionLink
+    Run % (vLink ? vLink : "https://github.com/BuilderDolphin/dolphSol-Macro/releases/latest")
+    ExitApp
 }
 
 ; data loading
 loadData(){
-    global configPath
+    global
+    logMessage("[loadData] Loading config data")
+
     savedRetrieve := getINIData(configPath)
     if (!savedRetrieve){
-        MsgBox, Unable to retrieve config data, your settings have been set to their defaults.
+        logMessage("[loadData] Unable to retrieve config data, Resetting to defaults.")
+        MsgBox, % "Unable to retrieve config data, your settings have been set to their defaults."
         savedRetrieve := {}
+    } else { ; Commented out to avoid log spam
+        ; logMessage("[loadData] Successfully retrieved config data:")
+        ; for i,v in savedRetrieve {
+            
+        ;     ; Don't log Aura Webhook settings
+        ;     if (InStr(i, "wh" , 1) = 1) {
+        ;         continue
+        ;     }
+
+        ;     ; Don't log private data
+        ;     if (i = "PrivateServerId" || i = "WebhookLink") {
+        ;         logMessage(i ": *hidden*", 1)
+        ;         continue ; don't log these
+        ;     }
+        ;     logMessage(i ": " v, 1)
+        ; }
     }
-    newOptions := {}
-    for i,v in options {
-        if (savedRetrieve.HasKey(i)){
+
+    local newOptions := {}
+    for i, v in options { ; Iterating through defined options does not load dynamic settings - currently aura, biomes
+        if (savedRetrieve.HasKey(i)) {
             newOptions[i] := savedRetrieve[i]
+
+            ; Temporary code to fix time error
+            for _, key in ["LastCraftSession","LastInvScreenshot","LastPotionAutoAdd"] {
+                if (i = key && savedRetrieve[i] > getUnixTime()) {
+                    ; logMessage("Resetting " i)
+                    ; Reset value so it's not too high to trigger
+                    newOptions[i] := 0
+                }
+            }
         } else {
+            logMessage("[loadData] Missing key: " i)
             newOptions[i] := v
         }
     }
     options := newOptions
+
+    ; Load aura names from JSON
+    FileRead, staticDataContent, % "staticData.json"
+    sData := Jxon_Load(staticDataContent)[1]
+    auraNames := []
+    for key, value in sData.stars {
+        auraNames.push(value.name)
+        if (value.mutations) {
+            for index, mutation in value.mutations {
+                auraNames.push(mutation.name)
+            }
+        }
+    }
+
+    ; Load aura settings with prefix
+    for index, auraName in auraNames {
+        sAuraName := RegExReplace(auraName, "[^a-zA-Z0-9]+", "_") ; Replace all non-alphanumeric characters with underscore
+        sAuraName := RegExReplace(sAuraName, "\_$", "") ; Remove any trailing underscore
+        key := "wh" . sAuraName
+        if (savedRetrieve.HasKey(key)) {
+            options[key] := savedRetrieve[key]
+        } else {
+            options[key] := 1 ; default enabled
+        }
+        ; logMessage("[loadData] Aura: " auraName " - " sAuraName " - " options[key])
+    }
+
+    ; Load biome settings
+    biomes := sData.biomes
+    for i, biome in biomes {
+        key := "Biome" . biome
+        if (savedRetrieve.HasKey(key)) {
+            options[key] := savedRetrieve[key]
+        } else {
+            options[key] := "Message" ; Set default
+        }
+        ; logMessage("[loadData] Biome: " biome " - " options[key])
+    }
+
+    LoadItemSchedulerOptions()
 }
-loadData()
 
 saveOptions(){
     global configPath,configHeader
@@ -232,40 +534,10 @@ updateYesClicked(){
     ExitApp
 }
 
-updateStaticData(){
-    url := "https://raw.githubusercontent.com/BuilderDolphin/dolphSol-Macro/main/lib/staticData.json"
-
-    WinHttp := ComObjCreate("WinHttp.WinHttpRequest.5.1")
-    WinHttp.Open("GET", url, false)
-    WinHttp.SetRequestHeader("Cache-Control", "no-cache")
-    WinHttp.SetRequestHeader("Pragma", "no-cache")
-    WinHttp.Send()
-
-    If (WinHttp.Status = 200) {
-        content := WinHttp.ResponseText
-        FileDelete, staticData.json
-        FileAppend, %content%, staticData.json
-    }
-
-    FileRead, staticDataContent, % "staticData.json"
-    sData := Jxon_Load(staticDataContent)[1]
-    if (sData.updateInfo.latestVersion != version){
-        uNotes := sData.updateInfo.updateNotes
-        MsgBox, 4, % "New Update Available", % "A new update is available! Would you like to head to the GitHub page to update your macro?" . (uNotes ? ("`n`nUpdate Notes:`n" . uNotes) : "")
-        
-        IfMsgBox Yes
-            updateYesClicked()
-    }
-    if (sData.announcement){
-        MsgBox, 0,Macro Announcement,% sData.announcement
-    }
-}
-updateStaticData()
-
 ; CreateFormData() by tmplinshi, AHK Topic: https://autohotkey.com/boards/viewtopic.php?t=7647
 ; Thanks to Coco: https://autohotkey.com/boards/viewtopic.php?p=41731#p41731
 ; Modified version by SKAN, 09/May/2016
-
+; Rewritten by iseahound in September 2022
 CreateFormData(ByRef retData, ByRef retHeader, objParam) {
 	New CreateFormData(retData, retHeader, objParam)
 }
@@ -279,8 +551,10 @@ Class CreateFormData {
         Local Boundary := this.RandomBoundary()
         Local BoundaryLine := "------------------------------" . Boundary
 
-        this.Len := 0 ; GMEM_ZEROINIT|GMEM_FIXED = 0x40
-        this.Ptr := DllCall( "GlobalAlloc", "UInt",0x40, "UInt",1, "Ptr" ) ; allocate global memory
+        ; Create an IStream backed with movable memory.
+        hData := DllCall("GlobalAlloc", "uint", 0x2, "uptr", 0, "ptr")
+        DllCall("ole32\CreateStreamOnHGlobal", "ptr", hData, "int", False, "ptr*", pStream:=0, "uint")
+        this.pStream := pStream
 
         ; Loop input paramters
         For k, v in objParam
@@ -291,9 +565,11 @@ Class CreateFormData {
                     str := BoundaryLine . CRLF
                     . "Content-Disposition: form-data; name=""" . k . """; filename=""" . FileName . """" . CRLF
                     . "Content-Type: " . this.MimeType(FileName) . CRLF . CRLF
+
                     this.StrPutUTF8( str )
                     this.LoadFromFile( Filename )
                     this.StrPutUTF8( CRLF )
+
                 }
             } Else {
                 str := BoundaryLine . CRLF
@@ -305,29 +581,40 @@ Class CreateFormData {
 
         this.StrPutUTF8( BoundaryLine . "--" . CRLF )
 
-        ; Create a bytearray and copy data in to it.
-        retData := ComObjArray( 0x11, this.Len ) ; Create SAFEARRAY = VT_ARRAY|VT_UI1
-        pvData := NumGet( ComObjValue( retData ) + 8 + A_PtrSize )
-        DllCall( "RtlMoveMemory", "Ptr",pvData, "Ptr",this.Ptr, "Ptr",this.Len )
+        this.pStream := ObjRelease(pStream) ; Should be 0.
+        pData := DllCall("GlobalLock", "ptr", hData, "ptr")
+        size := DllCall("GlobalSize", "ptr", pData, "uptr")
 
-        this.Ptr := DllCall( "GlobalFree", "Ptr",this.Ptr, "Ptr" ) ; free global memory 
+        ; Create a bytearray and copy data in to it.
+        retData := ComObjArray( 0x11, size ) ; Create SAFEARRAY = VT_ARRAY|VT_UI1
+        pvData  := NumGet( ComObjValue( retData ), 8 + A_PtrSize , "ptr" )
+        DllCall( "RtlMoveMemory", "Ptr", pvData, "Ptr", pData, "Ptr", size )
+
+        DllCall("GlobalUnlock", "ptr", hData)
+        DllCall("GlobalFree", "Ptr", hData, "Ptr")                   ; free global memory
 
         retHeader := "multipart/form-data; boundary=----------------------------" . Boundary
     }
 
     StrPutUTF8( str ) {
-        Local ReqSz := StrPut( str, "utf-8" ) - 1
-        this.Len += ReqSz ; GMEM_ZEROINIT|GMEM_MOVEABLE = 0x42
-        this.Ptr := DllCall( "GlobalReAlloc", "Ptr",this.Ptr, "UInt",this.len + 1, "UInt", 0x42 ) 
-        StrPut( str, this.Ptr + this.len - ReqSz, ReqSz, "utf-8" )
+        length := StrPut(str, "UTF-8") - 1 ; remove null terminator
+        VarSetCapacity(utf8, length)
+        StrPut(str, &utf8, length, "UTF-8")
+        DllCall("shlwapi\IStream_Write", "ptr", this.pStream, "ptr", &utf8, "uint", length, "uint")
     }
 
-    LoadFromFile( Filename ) {
-        Local objFile := FileOpen( FileName, "r" )
-        this.Len += objFile.Length ; GMEM_ZEROINIT|GMEM_MOVEABLE = 0x42 
-        this.Ptr := DllCall( "GlobalReAlloc", "Ptr",this.Ptr, "UInt",this.len, "UInt", 0x42 )
-        objFile.RawRead( this.Ptr + this.Len - objFile.length, objFile.length )
-        objFile.Close() 
+    LoadFromFile( filepath ) {
+        DllCall("shlwapi\SHCreateStreamOnFileEx"
+                    ,   "wstr", filepath
+                    ,   "uint", 0x0             ; STGM_READ
+                    ,   "uint", 0x80            ; FILE_ATTRIBUTE_NORMAL
+                    ,    "int", False           ; fCreate is ignored when STGM_CREATE is set.
+                    ,    "ptr", 0               ; pstmTemplate (reserved)
+                    ,   "ptr*", pFileStream:=0
+                    ,   "uint")
+        DllCall("shlwapi\IStream_Size", "ptr", pFileStream, "uint64*", size:=0, "uint")
+        DllCall("shlwapi\IStream_Copy", "ptr", pFileStream , "ptr", this.pStream, "uint", size, "uint")
+        ObjRelease(pFileStream)
     }
 
     RandomBoundary() {
@@ -339,15 +626,14 @@ Class CreateFormData {
 
     MimeType(FileName) {
         n := FileOpen(FileName, "r").ReadUInt()
-        Return (n = 0x474E5089) ? "image/png"
-        : (n = 0x38464947) ? "image/gif"
-        : (n&0xFFFF = 0x4D42 ) ? "image/bmp"
-        : (n&0xFFFF = 0xD8FF ) ? "image/jpeg"
-        : (n&0xFFFF = 0x4949 ) ? "image/tiff"
-        : (n&0xFFFF = 0x4D4D ) ? "image/tiff"
-        : "application/octet-stream"
+        Return (n        = 0x474E5089) ? "image/png"
+            :  (n        = 0x38464947) ? "image/gif"
+            :  (n&0xFFFF = 0x4D42    ) ? "image/bmp"
+            :  (n&0xFFFF = 0xD8FF    ) ? "image/jpeg"
+            :  (n&0xFFFF = 0x4949    ) ? "image/tiff"
+            :  (n&0xFFFF = 0x4D4D    ) ? "image/tiff"
+            :  "application/octet-stream"
     }
-
 }
 
 webhookPost(data := 0){
@@ -385,17 +671,24 @@ webhookPost(data := 0){
         objParam["file" i] := [v]
     }
 
-    CreateFormData(postdata,hdr_ContentType,objParam)
+    try {
+        CreateFormData(postdata, hdr_ContentType, objParam)
 
-    WebRequest := ComObjCreate("WinHttp.WinHttpRequest.5.1")
-    WebRequest.Open("POST", url, true)
-    WebRequest.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko")
-    WebRequest.SetRequestHeader("Content-Type", hdr_ContentType)
-    WebRequest.SetRequestHeader("Pragma", "no-cache")
-    WebRequest.SetRequestHeader("Cache-Control", "no-cache, no-store")
-    WebRequest.SetRequestHeader("If-Modified-Since", "Sat, 1 Jan 2000 00:00:00 GMT")
-    WebRequest.Send(postdata)
-    WebRequest.WaitForResponse()
+        WebRequest := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+        WebRequest.Open("POST", url, true)
+        WebRequest.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko")
+        WebRequest.SetRequestHeader("Content-Type", hdr_ContentType)
+        WebRequest.SetRequestHeader("Pragma", "no-cache")
+        WebRequest.SetRequestHeader("Cache-Control", "no-cache, no-store")
+        WebRequest.SetRequestHeader("If-Modified-Since", "Sat, 1 Jan 2000 00:00:00 GMT")
+        WebRequest.Send(postdata)
+        WebRequest.WaitForResponse()
+    } catch e {
+        logMessage("[webhookPost] Error creating webhook data:")
+        logMessage(e, 1)
+        ; MsgBox, 0, Webhook Error, % "An error occurred while creating the webhook data: " e
+        return
+    }
 }
 
 HasVal(haystack, needle) {
@@ -408,15 +701,16 @@ HasVal(haystack, needle) {
 }
 
 global possibleDowns := ["w","a","s","d","Space","Enter","Esc","r"]
-
 liftKeys(){
     for i,v in possibleDowns {
         Send {%v% Up}
     }
 }
 
-stop(terminate := 0) {
-    if (running){
+stop(terminate := 0, restart := 0) {
+    global
+    if (running && !restart){
+        running := 0
         updateStatus("Macro Stopped")
     }
 
@@ -425,15 +719,17 @@ stop(terminate := 0) {
     }
 
     DetectHiddenWindows, On
-    WinClose, % mainDir . "lib\status.ahk"
-
     for i,v in pathsRunning {
+        logMessage("[stop] Exiting running path: " . v, 1)
         WinClose, % v
     }
 
+    liftKeys()
     removeDim()
 
-    liftKeys()
+    if (!restart){
+        WinClose, % mainDir . "lib\status.ahk"
+    }
 
     if (camFollowMode){
         rotateCameraMode()
@@ -443,6 +739,7 @@ stop(terminate := 0) {
     saveOptions()
 
     if (terminate){
+        logMessage("[stop] Terminating application.")
         OutputDebug, Terminated
         ExitApp
     }
@@ -450,18 +747,77 @@ stop(terminate := 0) {
 
 global pauseDowns := []
 global paused := 0
-
 handlePause(){
-    if (paused){
+    paused := !paused
+    if (A_IsPaused){
+        ResumePaths()
+
+        updateStatus("Macro Running")
+        Gui, mainUI:+LastFoundExist
+        WinSetTitle, % "dolphSol Macro " version " (Running)"
+
         applyNewUIOptions()
         saveOptions()
         updateUIOptions()
 
-        WinActivate, ahk_id %robloxId%
-        for i,v in pauseDowns {
-            Send {%v% Down}
-        }
+        Pause, Off ; Unpause the script
     } else {
+        PausePaths()
+
+        updateStatus("Macro Paused")
+        Gui, mainUI:+LastFoundExist
+        WinSetTitle, % "dolphSol Macro " version " (Paused)"
+      
+        updateUIOptions()
+        Gui mainUI:Show
+
+        Pause, On, 1 ; Pause the main thread
+    }
+}
+
+StopPaths() {
+    global pathsRunning, camFollowMode
+
+    logMessage("Paths running: " pathsRunning.Length())
+
+    ; Close external AHK files
+    DetectHiddenWindows, On
+    for _, v in pathsRunning {
+        logMessage("[StopPaths] Stopping path: " . v, 1)
+        WinClose, % v
+        pathsRunning.Remove(HasVal(pathsRunning,v))
+    }
+
+    liftKeys()
+    removeDim()
+
+    if (camFollowMode){
+        rotateCameraMode()
+    }
+
+    saveOptions()
+}
+
+PausePaths() {
+    global pathsRunning
+
+    logMessage("Paths running: " pathsRunning.Length())
+    if (pathsRunning.Length() = 0) {
+        return
+    }
+
+    ; Send Pause to external AHK files
+    DetectHiddenWindows, On
+    WM_COMMAND := 0x0111
+    ID_FILE_PAUSE := 65403
+    for _, v in pathsRunning {
+        logMessage("[PausePaths] Pausing path: " . v, 1)
+        PostMessage, WM_COMMAND, ID_FILE_PAUSE,,, % v ahk_class AutoHotkey
+
+        hWnd := WinExist(v "ahk_class AutoHotkey")
+        logMessage("Paused: " JEE_AhkWinIsPaused(hWnd), 2)
+    }
+
         pauseDowns := []
         for i,v in possibleDowns {
             state := GetKeyState(v)
@@ -470,16 +826,58 @@ handlePause(){
                 Send {%v% Up}
             }
         }
-        updateUIOptions()
-        Gui mainUI:Show
+}
+
+ResumePaths() {
+    logMessage("Paths running: " pathsRunning.Length())
+    if (pathsRunning.Length() = 0) {
+        return
     }
-    paused := !paused
+
+    ; Send Un-Pause to external AHK files
+    DetectHiddenWindows, On
+    WM_COMMAND := 0x0111
+    ID_FILE_PAUSE := 65403
+    for i, v in pathsRunning {
+        logMessage("[ResumePaths] Resuming path: " . v, 1)
+        PostMessage, WM_COMMAND, ID_FILE_PAUSE,,, % v ahk_class AutoHotkey
+
+        hWnd := WinExist(v "ahk_class AutoHotkey")
+        logMessage("Paused: " JEE_AhkWinIsPaused(hWnd), 2)
+    }
+
+    ; Restore any previously paused key states
+    WinActivate, ahk_id %robloxId%
+    for i, v in pauseDowns {
+        Send {%v% Down}
+    }
+}
+
+; JEE_ScriptIsPaused - Detects if an external script is paused
+JEE_AhkWinIsPaused(hWnd) {
+	vDHW := A_DetectHiddenWindows
+	DetectHiddenWindows, On
+	SendMessage, 0x211,,,, % "ahk_id " hWnd ;WM_ENTERMENULOOP := 0x211
+	SendMessage, 0x212,,,, % "ahk_id " hWnd ;WM_EXITMENULOOP := 0x212
+	hMenuBar := DllCall("GetMenu", Ptr,hWnd, Ptr)
+	hMenuFile := DllCall("GetSubMenu", Ptr,hMenuBar, Int,0, Ptr)
+	;ID_FILE_PAUSE := 65403
+	vState := DllCall("GetMenuState", Ptr,hMenuFile, UInt,65403, UInt,0, UInt)
+	vIsPaused := (vState >> 3) & 1
+	DetectHiddenWindows, % vDHW
+	return vIsPaused
 }
 
 global regWalkFactor := 1.25 ; since i made the paths all with vip, normalize
 
 getWalkTime(d){
-    return d*(1 + (regWalkFactor-1)*(1-options.VIP))
+    baseTime := d * (1 + (regWalkFactor - 1) * (1 - options.VIP))
+    
+    if (options.Shifter) {
+        baseTime := baseTime / 1.50
+    }
+    
+    return baseTime
 }
 
 walkSleep(d){
@@ -500,6 +898,7 @@ press(k, duration := 50) {
     walkSleep(duration)
     walkSend(k,"Up")
 }
+
 press2(k, k2, duration := 50) {
     walkSend(k,"Down")
     walkSend(k2,"Down")
@@ -509,13 +908,22 @@ press2(k, k2, duration := 50) {
 }
 
 reset() {
+    global atSpawn
+
+    ; if (atSpawn) {
+    ;     return
+    ; }
+
     press("Esc",150)
-    Sleep, 50
+    Sleep, 50 * delayMultiplier
     press("r",150)
-    Sleep, 50
+    Sleep, 50 * delayMultiplier
     press("Enter",150)
-    Sleep, 50
+    Sleep, 50 * delayMultiplier
+
+    atSpawn := 1
 }
+
 jump() {
     press("Space")
 }
@@ -529,15 +937,14 @@ arcaneTeleport(){
 global initialized := 0
 global running := 0
 
-initialize()
-{
+initialize() {
     initialized := 1
-    resetZoom()
 
+    if (disableAlignment) {
+        ; Re-enable for reconnects
+        disableAlignment := false
+    } else {
     alignCamera()
-
-    if (options.InitialAlign){
-        ; runPath("initialAlignment",[],1) no more no reset!
     }
 }
 
@@ -551,39 +958,130 @@ resetZoom(){
         Sleep, 400
     }
 
-    getRobloxPos(pX,pY,width,height)
-    MouseMove, % pX + width*0.5, % pY + height*0.5
+    ; press("i", 1000)
+    ; Sleep, 200
+    ; press("o", 200) ; TODO: Allow user to configure zoom distance
+    ; Sleep, 200
 
-    Sleep, 300
-    MouseClick
-    Sleep, 250
+    MouseMove, % A_ScreenWidth/2, % A_ScreenHeight/2
+    Sleep, 200
     Loop 20 {
         Click, WheelUp
         Sleep, 50
     }
     Loop 10 {
         Click, WheelDown
-        Sleep, 100
+        Sleep, 50
     }
 }
+
+resetCameraAngle(){
+    resetZoom()
+
+    ; Get window position and size
+    getRobloxPos(pX,pY,width,height)
+
+    ; Pan camera
+    centerX := Floor(pX + width/2)
+    centerY := Floor(pY + height/2)
+    MouseClickDrag(centerX, centerY, centerX, centerY + 50)
+}
+
+MouseClickDrag(x1, y1, x2, y2) {
+    ; Move to start position
+    MoveMouseDll(x1, y1, false)
+    Sleep, 50
+    Send {RButton Down} ; Press the button
+    Sleep, 50
+    
+    ; Drag to end position
+    MoveMouseDll(x2 - x1, y2 - y1, true)
+    Sleep, 50
+    Send, {RButton Up} ; Release the button
+}
+
+MoveMouseDll(x, y, relative := true) {
+    MOUSEEVENTF_MOVE := 0x0001
+    MOUSEEVENTF_ABSOLUTE := 0x8000
+    
+    flags := MOUSEEVENTF_MOVE
+    if (!relative) {
+        flags := flags | MOUSEEVENTF_ABSOLUTE
+    }
+    
+    DllCall("mouse_event", "UInt", flags, "Int", x, "Int", y, "UInt", 0, "UInt", 0)
+}
+
+; MouseClickDragDll(button, x1, y1, x2, y2) {
+;     MOUSEEVENTF_LEFTDOWN := 0x0002
+;     MOUSEEVENTF_LEFTUP := 0x0004
+;     MOUSEEVENTF_RIGHTDOWN := 0x0008
+;     MOUSEEVENTF_RIGHTUP := 0x0010
+    
+;     buttonDown := (button = "Right") ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN
+;     buttonUp := (button = "Right") ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP
+
+;     ; Move to start position
+;     MoveMouse(x1, y1, false)
+;     Sleep, 50
+    
+;     ; Press the button
+;     ; DllCall("mouse_event", "UInt", buttonDown, "Int", 0, "Int", 0, "UInt", 0, "UInt", 0)
+;     Send {RButton Down}
+;     Sleep, 50
+    
+;     ; Drag to end position
+;     MoveMouse(x2 - x1, y2 - y1, true)
+;     Sleep, 50
+    
+;     ; Release the button
+;     Send, {RButton Up}
+;     ; DllCall("mouse_event", "UInt", buttonUp, "Int", 0, "Int", 0, "UInt", 0, "UInt", 0)
+; }
 
 ; Paths
 
 rotateCameraMode(){
+    ; Initialize retry counter
+    static retryCount := 0
+    maxRetries := 5 ; Set the maximum number of retries
+
+    ; Update to the new camera mode
+    camFollowMode := !camFollowMode
+    mode := camFollowMode ? "Follow" : "Default"
+
     press("Esc")
     Sleep, 500
     press("Tab")
     Sleep, 500
     press("Down")
-    Sleep, 150
+    Sleep, 150 * delayMultiplier
     press("Right")
-    Sleep, 150
+    Sleep, 150 * delayMultiplier
     press("Right")
-    Sleep, 150
+    Sleep, 150 * delayMultiplier
+
+    ; If enabled, use OCR to confirm the camera mode change
+    while (options.OCREnabled && !containsText(1055, 305, 120, 30, mode)) {
+        ; Avoid infinite loop
+        if (retryCount >= maxRetries) {
+            logMessage("[rotateCameraMode] Failed to change camera mode to " mode)
+            camFollowMode := !camFollowMode ; Reset to previous state
+            retryCount := 0 ; Reset retry counter for the next call
+            return
+        }
+
+        press("Right")
+        Sleep, 150 * delayMultiplier
+
+        retryCount++
+    }
+
     press("Esc")
     Sleep, 250
 
-    camFollowMode := !camFollowMode
+    ; Reset retry counter after successful execution
+    retryCount := 0
 }
 
 alignCamera(){
@@ -598,45 +1096,40 @@ alignCamera(){
     reset()
     Sleep, 100
 
-    getRobloxPos(rX,rY,rW,rH)
-
-    rotateCameraMode()
+    rotateCameraMode() ; Follow
 
     clickMenuButton(2)
     Sleep, 500
     
+    getRobloxPos(rX,rY,rW,rH)
     MouseMove, % rX + rW*0.15, % rY + 44 + rH*0.05 + options.BackOffset
     Sleep, 200
     MouseClick
     Sleep, 200
 
-    rotateCameraMode()
-
+    rotateCameraMode() ; Default(Classic)
+    resetCameraAngle() ; Fix angle before aligning direction
     Sleep, 100
 
-    walkSend("w","Down")
     walkSend("d","Down")
-    walkSleep(500)
+    walkSleep(200)
     jump()
     walkSleep(400)
-    jump()
-    walkSleep(600)
-
     walkSend("d","Up")
-    walkSend("a","Down")
-    walkSleep(1500)
-
-    walkSend("a","Up")
+    walkSend("w","Down")
+    walkSleep(500)
+    jump()
+    walkSleep(900)
     walkSend("w","Up")
 
-    rotateCameraMode()
-
+    rotateCameraMode() ; Follow
     Sleep, 1500
+    rotateCameraMode() ; Default(Classic)
+    resetCameraAngle()
 
-    rotateCameraMode()
-
-    reset()
+    ; reset() ; Redundant, handleCrafting() will use align() if needed
     removeDim()
+    reset()
     Sleep, 2000
 }
 
@@ -692,6 +1185,7 @@ runPath(pathName,voidPoints,noCenter = 0){
         
         DetectHiddenWindows, On
         Run, % """" . A_AhkPath . """ """ . targetDir . """"
+        pathRuntime := A_TickCount
 
         stopped := 0
 
@@ -711,6 +1205,16 @@ runPath(pathName,voidPoints,noCenter = 0){
         voidCooldown := 0
 
         while (WinExist(targetDir)){
+            if (!running){
+                stopped := 1
+                break
+            }
+
+            if (A_IsPaused){
+                Sleep, 100
+                continue
+            }
+
             for i,v in voidPoints {
                 if (v){
                     if (A_TickCount-startTick >= getWalkTime(v)){
@@ -740,6 +1244,8 @@ runPath(pathName,voidPoints,noCenter = 0){
             Sleep, 225
             voidCooldown := Max(0,voidCooldown-1)
         }
+        ; elapsedTime := (A_TickCount - pathRuntime)//1000
+        ; logMessage("[runPath] " pathName " completed in " elapsedTime " seconds")
 
         if (stopped){
             WinClose, % targetDir
@@ -757,12 +1263,13 @@ runPath(pathName,voidPoints,noCenter = 0){
 
 searchForItems(){
     updateStatus("Searching for Items")
-    
     atSpawn := 0
 
     runPath("searchForItems",[8250,18000],1)
 
     options.CollectionLoops += 1
+
+    ; logMessage("[searchForItems] Items collected")
 }
 
 doObby(){
@@ -787,34 +1294,68 @@ walkToJakesShop(){
 }
 
 walkToPotionCrafting(){
+    sleep, 2000
     walkSend("w","Down")
-    walkSleep(2300)
-    jump()
-    walkSleep(300 + 100*(!options.VIP))
+    walkSend("a","Down")
+    walkSleep(3800)
+    walkSend("a","Up")
+    walkSleep(675)
     walkSend("w","Up")
-    press("a",9500)
-    walkSend("d","Down")
+    walkSend("a","Down")
+    walkSleep(777)
     jump()
-    walkSleep(900)
-    walkSend("d","Up")
-    Send {Space Down}
+    walkSend("w","Down")
+    walkSleep(200)
+    walkSend("w","Up")
+    walkSend("a","Down")
+    walkSleep(800)
     walkSend("s","Down")
-    walkSleep(2000)
-    Send {Space Up}
-    walkSleep(3000)
+    walkSleep(235)
     walkSend("s","Up")
+    walkSleep(1225)
+    jump()
+    walkSleep(350)
+    walkSend("a","Up")
+    walkSend("a","Down")
+    walkSleep(2500)
+    press("s",500)
+    walkSend("a","Up")
+    walkSend("s","Down")
+    walkSleep(100)
+    jump()
+    walkSleep(800)
+    walkSend("a","Down")
+    walkSleep(400)
+    jump()
+    walkSleep(200)
+    walkSend("s","Up")
+    walkSleep(500)
+    jump()
+    walkSleep(740)
+    walkSend("a","up")
+    walkSleep(200)
+    walkSend("s","down")
+    walkSleep(3050)
+    walkSend("s","up")
+    Sleep, 200
 }
 
 ; End of paths
 
 closeChat(){
+    offsetX := 75
+    offsetY := 25 ; Changed from 12
+    if (options["RobloxUpdatedUI"] = 2) {
+        offsetX := 144
+        offsetY := 40
+    }
+
     getRobloxPos(pX,pY,width,height)
-    PixelGetColor, chatCheck, % pX + 75, % pY + 12, RGB
-    if (compareColors(chatCheck,0xffffff) < 16){ ; is chat open??
-        MouseMove, % pX + 75, % pY + 12
-        Sleep, 300
-        MouseClick
-        Sleep, 100
+    PixelGetColor, chatCheck, % pX + offsetX, % pY + offsetY, RGB
+    isWhite := compareColors(chatCheck,0xffffff) < 16
+    isGray := compareColors(chatCheck,0xc3c3c3) < 16
+    if (isWhite || isGray){ ; is chat open??
+        ClickMouse(pX + offsetX, pY + offsetY)
     }
 }
 
@@ -828,40 +1369,10 @@ checkInvOpen(){
 mouseActions(){
     updateStatus("Performing Mouse Actions")
 
-    getRobloxPos(pX,pY,width,height)
-
     ; close jake shop if popup
-
     openP := getPositionFromAspectRatioUV(0.718,0.689,599/1015)
     openP2 := getPositionFromAspectRatioUV(0.718,0.689,1135/1015)
-    MouseMove, % openP[1], % openP2[2]
-    Sleep, 200
-    MouseClick
-    Sleep, 200
-
-    ; re equip
-    if (options.AutoEquipEnabled){
-        closeChat()
-        alreadyOpen := checkInvOpen()
-
-        if (!alreadyOpen){
-            clickMenuButton(1)
-        }
-        Sleep, 100
-        sPos := getPositionFromAspectRatioUV(options.AutoEquipX,options.AutoEquipY,storageAspectRatio)
-        MouseMove, % sPos[1], % sPos[2]
-        Sleep, 300
-        MouseClick
-        Sleep, 100
-        ePos := getPositionFromAspectRatioUV(storageEquipUV[1],storageEquipUV[2],storageAspectRatio)
-        MouseMove, % ePos[1], % ePos[2]
-        Sleep, 300
-        MouseClick
-        Sleep, 100
-        clickMenuButton(1)
-    }
-
-    Sleep, 250
+    ClickMouse(openP[1], openP2[2])
 
     if (options.ExtraRoblox){ ; for afking my 3rd alt lol
         MouseMove, 2150, 700
@@ -879,30 +1390,25 @@ mouseActions(){
         MouseClick
         Sleep, 250
     }
-
-    MouseMove, % pX + width*0.5, % pY + height*0.5
-    Sleep, 300
-    MouseClick
-    Sleep, 250
 }
 
 isFullscreen() {
-	WinGetPos,,, w, h, Roblox
+	WinGetPos,,, w, h, % "ahk_id " . GetRobloxHWND()
 	return (w = A_ScreenWidth && h = A_ScreenHeight)
 }
 
 ; used from natro
-GetRobloxHWND()
-{
-	if (hwnd := WinExist("Roblox ahk_exe RobloxPlayerBeta.exe"))
+GetRobloxHWND(){
+	if (hwnd := WinExist("Roblox ahk_exe RobloxPlayerBeta.exe")) {
 		return hwnd
-	else if (WinExist("Roblox ahk_exe ApplicationFrameHost.exe"))
-	{
+	} else if (WinExist("Roblox ahk_exe ApplicationFrameHost.exe")) {
 		ControlGet, hwnd, Hwnd, , ApplicationFrameInputSinkWindow1
 		return hwnd
-	}
-	else
+	} else {
+        logMessage("[GetRobloxHWND] Roblox Process: Unknown", 1)
+        Sleep, 5000
 		return 0
+    }
 }
 
 getRobloxPos(ByRef x := "", ByRef y := "", ByRef width := "", ByRef height := "", hwnd := ""){
@@ -916,8 +1422,13 @@ getRobloxPos(ByRef x := "", ByRef y := "", ByRef width := "", ByRef height := ""
     y := NumGet(&buf,4,"Int")
     width := NumGet(&buf,8,"Int")
     height := NumGet(&buf,12,"Int")
-}
 
+    ; What to do if Roblox isn't open
+    if (macroStarted && !width) {
+        attemptReconnect()
+        return
+    }
+}
 
 ; screen stuff
 
@@ -926,7 +1437,7 @@ checkHasObbyBuff(BRCornerX, BRCornerY, statusEffectHeight){
         return 1
     }
     global obbyStatusEffectColor,obbyStatusEffectColor2,hasObbyBuff,statusEffectSpace
-    Loop, 5
+    Loop, 10
     {
         targetX := BRCornerX - (statusEffectHeight/2) - (statusEffectHeight + statusEffectSpace)*(A_Index-1)
         targetY := BRCornerY - (statusEffectHeight/2)
@@ -940,13 +1451,6 @@ checkHasObbyBuff(BRCornerX, BRCornerY, statusEffectHeight){
     }  
     hasObbyBuff := 0
     return 0
-}
-
-getUV(x,y,oX,oY,width,height){
-    return [((x-oX)*2 - width)/height,((y-oY)*2 - height)/height]
-}
-getFromUV(uX,uY,oX,oY,width,height){
-    return [Floor((uX*height + width)/2)+oX,Floor((uY*height + height)/2)+oY]
 }
 
 spawnCheck(){ ; not in use
@@ -995,6 +1499,10 @@ compareColors(color1, color2) ; determines how far apart 2 colors are
 
     cV := [color1V[1] - color2V[1], color1V[2] - color2V[2], color1V[3] - color2V[3]]
     dist := Abs(cV[1]) + Abs(cV[2]) + Abs(cV[3])
+
+    if (color2 not in 0x000000,0xffffff,0x393b3d){
+        logMessage("[compareColors] " color1 " " color2 " " dist, 1)
+    }
     return dist
 }
 
@@ -1006,9 +1514,11 @@ clamp(x,mn,mx){
 
 ; menu ui stuff (ingame)
 
-global menuBarOffset := 10 ;10 pixels from left edge
+global menuBarOffset := 20 ;10 pixels from left edge
 
 getMenuButtonPosition(num, ByRef posX := "", ByRef posY := ""){ ; num is 1-7, 1 being top, 7 only existing if you are the private server owner
+    num := options["InOwnPrivateServer"] ? num : num + 1
+    
     getRobloxPos(rX, rY, width, height)
 
     menuBarVSpacing := 10.5*(height/1080)
@@ -1017,13 +1527,14 @@ getMenuButtonPosition(num, ByRef posX := "", ByRef posY := ""){ ; num is 1-7, 1 
     startPos := [menuEdgeCenter[1]+(menuBarButtonSize/2),menuEdgeCenter[2]+(menuBarButtonSize/4)-(menuBarButtonSize+menuBarVSpacing-1)*3.5] ; final factor = 0.5x (x is number of menu buttons visible to all, so exclude private server button)
     
     posX := startPos[1]
-    posY := startPos[2] + (menuBarButtonSize+menuBarVSpacing)*(num-1)
+    posY := startPos[2] + (menuBarButtonSize+menuBarVSpacing)*(num-0.5)
 
     MouseMove, % posX, % posY
 }
 
 clickMenuButton(num){
     getMenuButtonPosition(num, posX, posY)
+
     MouseMove, posX, posY
     Sleep, 200
     MouseClick
@@ -1032,6 +1543,18 @@ clickMenuButton(num){
 ; storage ratio: w1649 : h952
 global storageAspectRatio := 952/1649
 global storageEquipUV := [-0.625,0.0423] ; equip button
+global storageSearchUV := [-0.2833,-0.4074]
+global storageSearchResultUV := [-0.3, -0.32]
+global specialStorageSearchUV := [-0.2833,0.105]
+global specialStorageSearchResultUV := [-0.3, 0.2]
+
+getUV(x,y,oX,oY,width,height){
+    return [((x-oX)*2 - width)/height,((y-oY)*2 - height)/height]
+}
+
+getFromUV(uX,uY,oX,oY,width,height){
+    return [Floor((uX*height + width)/2)+oX,Floor((uY*height + height)/2)+oY]
+}
 
 getAspectRatioSize(ratio, width, height){
     fH := width*ratio
@@ -1072,12 +1595,62 @@ getAspectRatioUVFromPosition(x,y,aspectRatio){
     return p
 }
 
-/*
-Sleep, 10000
-MouseGetPos, mx,my
-p := getAspectRatioUVFromPosition(mx,my,storageAspectRatio)
-OutputDebug, % p[1] " " p[2]
-*/
+; Convert 1920x1080 coordinates to UV coordinates and then to user's screen coordinates
+convertScreenCoordinates(x, y, ByRef cX := "", ByRef cY := "") {
+    ; aspectRatio := 1920/1080
+    
+    ; getRobloxPos(rX, rY, width, height)
+    ; robloxAspectRatio := width/height
+
+    ; Convert screen coordinates to UV coordinates
+    ; uv := getAspectRatioUVFromPosition(x, y, aspectRatio)
+
+    ; Convert UV coordinates back to screen coordinates for mouse clicks
+    ; cPos := getPositionFromAspectRatioUV(uv[1], uv[2], robloxAspectRatio)
+    ; cX := cPos[1]
+    ; cY := cPos[2]
+    
+    ; Use original 1920x1080 coordinates to avoid conversion issues as of 6/24
+    cX := x
+    cY := y
+}
+
+getScreenCenter(){
+    getRobloxPos(rX, rY, width, height)
+    return [rX + width/2, rY + height/2]
+}
+
+ShowMousePos() {
+    MouseGetPos, mx,my
+    p := getAspectRatioUVFromPosition(mx,my,storageAspectRatio)
+    c := convertScreenCoordinates(mx,my)
+    Tooltip, % "Current: " mx ", " my "`n"
+            . "UV Ratio: " p[1] ", " p[2] "`n"
+            . "1920x1080: " c[1] ", " c[2]
+    Sleep, 2500
+    Tooltip
+}
+
+isCraftingMenuOpen() {
+    getRobloxPos(rX,rY,width,height)
+    centerPos := [width*0.182, height*0.06]
+    areaDims := [125, 50]
+    closeX := rX + centerPos[1] - (areaDims[1]/2)
+    closeY := rY + centerPos[2] - (areaDims[2]/2)
+
+    if (containsText(closeX, closeY, areaDims[1], areaDims[2], "Close")) {
+        return 1
+    }
+
+    PixelSearch, blackX, blackY, closeX, closeY, closeX+areaDims[1], closeY+areaDims[2], 0x060A09, 16, Fast RGB
+    PixelSearch, whiteX, whiteY, closeX, closeY, closeX+areaDims[1], closeY+areaDims[2], 0xFFFFFF, 16, Fast RGB
+    if (blackX && whiteX) {
+        logMessage("Close button found")
+        return 1
+    }
+
+    return 0
+}
 
 clickCraftingSlot(num,isPotionSlot := 0){
     getRobloxPos(rX,rY,width,height)
@@ -1086,13 +1659,13 @@ clickCraftingSlot(num,isPotionSlot := 0){
     scrollerHeight := 0.78*height
     scrollStartY := 0.15*height + rY
 
-    slotHeight := (width/1920)*138
+    slotHeight := (width/1920)*129 ; Changed 138 to 129 - Fixed gilded coin in Era 7
 
     if (isPotionSlot){ ; potion select sub menu
         scrollCenter := 0.365*width + rX
         scrollerHeight := 0.38*height
         scrollStartY := 0.325*height + rY
-        slotHeight := (width/1920)*129
+        ; slotHeight is the same for both crafting menus as of Era 7. May change again in the future
     }
 
     MouseMove, % scrollCenter, % scrollStartY-2
@@ -1130,7 +1703,7 @@ clickCraftingSlot(num,isPotionSlot := 0){
     MouseMove, % mouseX + width/4, % mouseY
 }
 
-craftingClickAdd(totalSlots,maxes := 0,isGear := 0){
+craftingClickAdd(totalSlots, maxes := 0, isGear := 0) {
     if (!maxes){
         maxes := []
     }
@@ -1149,27 +1722,56 @@ craftingClickAdd(totalSlots,maxes := 0,isGear := 0){
         slotSize := 0.033*height
     }
 
-    slotI := 1
+    fractions := [1, 0.5, 0.1, 0]
+
+    slotI := 1 ; Maybe use A_Index instead?
     Loop %totalSlots% {
-        clickCount := maxes[slotI]
-        MouseMove, % (clickCount == 1) ? startX : startXAmt, % startY + slotSize*(A_Index-1)
-        Sleep, 200
-        MouseClick, WheelUp
-        Sleep, 200
-        if (clickCount > 1){
+        ; Skip crafting slot if already complete
+        slotPosY := startY + slotSize*(A_Index-1)
+        PixelGetColor, checkC, startX, slotPosY, RGB
+        ; logMessage("Slot " slotI " Color: " checkC, 1)
+        if (!isGear && compareColors(checkC, 0x178111) < 6) {
+            logMessage("Skipping completed slot " slotI " - color: " checkC, 1)
+            slotI += 1
+            continue
+        }
+
+        for _, fraction in fractions {
+            ; Calculate the input quantity based on the maximum amount
+            inputQty := Max(1, Floor(maxes[slotI] * fraction))
+            ; logMessage("Crafting Slot " slotI " - Input Quantity: " inputQty " - Fraction: " fraction, 1)
+
+            MouseMove, % startXAmt, % slotPosY
+            Sleep, 200
             MouseClick
             Sleep, 200
-            clickCount := clickCount ? clickCount : 100
-            Send % clickCount
+            SendInput, % inputQty
             Sleep, 200
+
+            ; Click the "Add" button
+            MouseMove, % startX, % slotPosY
+            Sleep, 200
+            Loop 3 {
+                MouseClick
+                Sleep, 200
+            }
+
+            ; Check if the crafting slot is complete
+            PixelGetColor, checkC, startX, slotPosY, RGB
+            if (compareColors(checkC, 0x178111) < 20) {
+                break
+            }
+
+            ; Avoid the fraction loop if the quantity is 1
+            if (inputQty = 1) {
+                break
+            }
         }
-        MouseMove, % startX, % startY + slotSize*(A_Index-1)
-        Sleep, 200
+
         slotI += 1
-        MouseClick
-        Sleep, 200
     }
 
+    ; Click the "Craft" button
     if (isGear){
         MouseMove, % 0.43*width + rX, % 0.635*height + rY
     } else {
@@ -1179,24 +1781,73 @@ craftingClickAdd(totalSlots,maxes := 0,isGear := 0){
     MouseClick
 }
 
-handleCrafting(){
+; craftLocation: 0 = none, 1 = Stella, 2 = Jake
+; retryCount: limit retry attempts to prevent infinite loop
+handleCrafting(craftLocation := 0, retryCount := 0){
+    static potionAutoAdd := 0
+
     getRobloxPos(rX,rY,rW,rH)
-    if (options.PotionCraftingEnabled || options.ItemCraftingEnabled){
+    if (retryCount = 0) {
         updateStatus("Beginning Crafting Cycle")
+        Sleep, 2000
+    } else if (retryCount = 2) {
+        updateStatus("Crafting Failed. Fixing Camera...")
+        Sleep, 2000
+        alignCamera()
+        reset()
+        Sleep, 500
+        handleCrafting(0,retryCount+1)
+        return
+    } else if (retryCount > 2) {
+        updateStatus("Crafting Failed. Continuing...")
+        Sleep, 2000
+        return
     }
-    if (options.PotionCraftingEnabled){
-        align()
+
+    if (options.PotionCraftingEnabled && craftLocation != 2){
+        ; align() is this even needed?
+        reset()
         updateStatus("Walking to Stella's Cave (Crafting)")
         walkToPotionCrafting()
+        Sleep, % (StellaPortalDelay && StellaPortalDelay > 0) ? StellaPortalDelay : 0
+        resetCameraAngle()
         Sleep, 2000
-        Send {Right Down}
-        Sleep, 1000
-        Send {Right Up}
+        walkSend("a","Down")
+        walkSleep(500)
+        walkSend("a","Up")
+        walkSleep(500)
         press("f")
-        Sleep, 500
+        walkSleep(1000)
+
+        ; OCR - Check for "Close" button
+        if (!isCraftingMenuOpen()) {
+            updateStatus("Failed to open Potion menu")
+            alignCamera()
+            handleCrafting(1,retryCount+1)
+            return
+        }
+
         updateStatus("Crafting Potions")
+
+        if (options.potionAutoAddEnabled) {
+            if ((getUnixTime() - options.LastPotionAutoAdd) >= ((options.PotionAutoAddInterval-1) * 60)) { ; 1m buffer to avoid waiting another cycle
+                options.LastPotionAutoAdd := getUnixTime()
+
+                ; Determine which potion to Auto Add next
+                Loop 3 {
+                    v := options["PotionCraftingSlot" A_Index]
+                    if (v) {
+                        maxIndex := A_Index
+                    }
+                }
+                potionAutoAdd := (potionAutoAdd >= maxIndex) ? 1 : potionAutoAdd + 1
+                logMessage("Auto Add Potion: " potionIndex[potionAutoAdd], 1)
+            }
+        }
+
         Loop 3 {
             v := options["PotionCraftingSlot" A_Index]
+            logMessage("  Crafting: " potionIndex[v])
             if (v && craftingInfo[potionIndex[v]]){
                 info := craftingInfo[potionIndex[v]]
                 loopCount := info.attempts
@@ -1204,22 +1855,29 @@ handleCrafting(){
                 Sleep, 200
                 clickCraftingSlot(info.subSlot,1)
                 Sleep, 200
-                Loop %loopCount% {
-                    craftingClickAdd(info.addSlots,info.maxes)
+
+                ; Loop %loopCount% {
+                craftingClickAdd(info.addSlots,info.maxes)
+                Sleep, 200
+                ; }
+
+                if (A_Index = potionAutoAdd) { ; Need to make sure this doesn't toggle Auto Add off
+                    logMessage("Auto Add potion: " potionIndex[v], 1)
+                    enableAutoAdd()
                     Sleep, 200
                 }
             }
         }
+
+        ; Click the "Close" button
         MouseMove, % rX + rW*0.175, % rY + rH*0.05
         Sleep, 200
         MouseClick
-        Sleep, 500
-        resetZoom()
 
-        alignCamera()
+        ; alignCamera()
     }
-    if (options.ItemCraftingEnabled){
-        align()
+    if (options.ItemCraftingEnabled && craftLocation != 1){
+        ; align()
         updateStatus("Walking to Jake's Shop (Crafting)")
         walkToJakesShop()
         Sleep, 100
@@ -1230,34 +1888,50 @@ handleCrafting(){
         MouseMove, % openP[1], % openP2[2]
         Sleep, 200
         MouseClick
-        Sleep, 500
-        updateStatus("Crafting Items")
-        if (options.CraftingGildedCoin){
-            info := craftingInfo["Gilded Coin"]
-            loopCount := info.attempts + Floor(info.addedAttempts*options.CraftingInterval)
-            clickCraftingSlot(info.slot)
-            Sleep, 200
-            Loop %loopCount% {
-                craftingClickAdd(info.addSlots,info.maxes,1)
-                Sleep, 200
-            }
+        Sleep, 1000
+
+        ; OCR - Check for "Close" button
+        if (!isCraftingMenuOpen()) {
+            updateStatus("Failed to open Jake's Shop")
+            handleCrafting(2,retryCount+1)
+            alignCamera()
+            return
         }
+
+        ; Click the "Close" button
         MouseMove, % rX + rW*0.175, % rY + rH*0.05
         Sleep, 200
         MouseClick
-        Sleep, 500
-        resetZoom()
 
-        alignCamera()
+        ; alignCamera()
+    }
+
+    ; reset()
+}
+
+; Click Auto Add if not enabled
+enableAutoAdd() {
+    getRobloxPos(rX,rY,width,height)
+    centerPos := [width*0.599, height*0.629]
+    areaDims := [100, 50]
+    autoX := rX + centerPos[1] - (areaDims[1]/2)
+    autoY := rY + centerPos[2] - (areaDims[2]/2)
+
+    PixelSearch,,, autoX, autoY, autoX+areaDims[1], autoY+areaDims[2], 0x30FF20, 16, Fast RGB
+    if (ErrorLevel) {
+        ClickMouse(rX + centerPos[1], rY + centerPos[2])
+        logMessage("Auto Add clicked", 1)
+    } else { ; Skip if Auto Add is already enabled
+        logMessage("Auto Add already enabled", 1)
     }
 }
 
 waitForInvVisible(){
-    Loop 20 {
+    Loop 10 {
         alreadyOpen := checkInvOpen()
         if (alreadyOpen)
             break
-        Sleep, 500
+        Sleep, 50
     }
 }
 
@@ -1277,7 +1951,7 @@ screenshotInventories(){ ; from all closed
     ssMap := Gdip_BitmapFromScreen(topLeft[1] "|" topLeft[2] "|" totalSize[1] "|" totalSize[2])
     Gdip_SaveBitmapToFile(ssMap,ssPath)
     Gdip_DisposeBitmap(ssMap)
-    try webhookPost({files:[ssPath],embedImage:"attachment://ss.jpg",embedTitle: "Aura Storage Screenshot"})
+    try webhookPost({files:[ssPath],embedImage:"attachment://ss.jpg",embedTitle: "Aura Storage"})
 
     Sleep, 200
     clickMenuButton(3)
@@ -1294,9 +1968,147 @@ screenshotInventories(){ ; from all closed
     ssMap := Gdip_BitmapFromScreen(topLeft[1] "|" topLeft[2] "|" totalSize[1] "|" totalSize[2])
     Gdip_SaveBitmapToFile(ssMap,ssPath)
     Gdip_DisposeBitmap(ssMap)
-    try webhookPost({files:[ssPath],embedImage:"attachment://ss.jpg",embedTitle: "Item Inventory Screenshot"})
+    try webhookPost({files:[ssPath],embedImage:"attachment://ss.jpg",embedTitle: "Item Inventory"})
 
     Sleep, 200
+    clickMenuButton(5)
+    Sleep, 200
+
+    waitForInvVisible()
+
+    dailyTab := getPositionFromAspectRatioUV(0.5185, -0.4389, storageAspectRatio)
+    ClickMouse(dailyTab[1], dailyTab[2])
+
+    ssMap := Gdip_BitmapFromScreen(topLeft[1] "|" topLeft[2] "|" totalSize[1] "|" totalSize[2])
+    Gdip_SaveBitmapToFile(ssMap,ssPath)
+    Gdip_DisposeBitmap(ssMap)
+    try webhookPost({files:[ssPath],embedImage:"attachment://ss.jpg",embedTitle: "Quests"})
+
+    Sleep, 200
+    clickMenuButton(5)
+    Sleep, 200
+}
+
+ClaimQuests() {
+    updateStatus("Checking Quests")
+
+    ; Open Quest Menu
+    clickMenuButton(5)
+    waitForInvVisible()
+
+    dailyTab := getPositionFromAspectRatioUV(0.5185, -0.4389, storageAspectRatio)
+    ClickMouse(dailyTab[1], dailyTab[2])
+
+    btnX := 0.6393
+    btnYList := [0.0382, 0.1927, 0.3416]
+
+    for _, btnY in btnYList {
+        claimButton := getPositionFromAspectRatioUV(btnX, btnY, storageAspectRatio)
+        ClickMouse(claimButton[1], claimButton[2])
+        Sleep, 250
+    }
+
+    ; Close Quest Menu
+    clickMenuButton(5)
+    Sleep, 200
+}
+
+; Simplify frequent code
+ClickMouse(posX, posY) {
+    MouseMove, % posX, % posY
+    Sleep, 500
+    MouseClick
+    Sleep, 200
+
+    ; Highlight(posX-5, posY-5, 10, 10, 5000) ; Highlight for 5 seconds
+}
+
+EquipAura(auraName := "") {
+    if (auraName = "") {
+        return
+    }
+
+    closeChat()
+    alreadyOpen := checkInvOpen()
+    if (!alreadyOpen){
+        clickMenuButton(1)
+        Sleep, 100
+    }
+
+    ; Search
+    if (options.SearchSpecialAuras) {
+        ; Click on the search input for special storage
+        posBtn := getPositionFromAspectRatioUV(specialStorageSearchUV[1], specialStorageSearchUV[2], storageAspectRatio)
+    } else {
+        ; Click on the search input for normal storage
+        posBtn := getPositionFromAspectRatioUV(StorageSearchUV[1], StorageSearchUV[2], storageAspectRatio)
+    }
+    ClickMouse(posBtn[1], posBtn[2])
+    SendInput, % auraName
+    Sleep, 500
+
+    ; Search Result
+    if (options.SearchSpecialAuras) {
+        posBtn := getPositionFromAspectRatioUV(specialStorageSearchResultUV[1], specialStorageSearchResultUV[2], storageAspectRatio)
+    } else {
+        posBtn := getPositionFromAspectRatioUV(StorageSearchResultUV[1], StorageSearchResultUV[2], storageAspectRatio)
+    }
+    ClickMouse(posBtn[1], posBtn[2])
+    Sleep, 500
+
+    ; Equip
+    posBtn := getPositionFromAspectRatioUV(StorageEquipUV[1], storageEquipUV[2], storageAspectRatio)
+    ClickMouse(posBtn[1], posBtn[2])
+    Sleep, 100
+
+    ; Clear Search - Necessary for screenshot
+    if (options.SearchSpecialAuras) {
+        posBtn := getPositionFromAspectRatioUV(specialStorageSearchUV[1], specialStorageSearchUV[2], storageAspectRatio)
+    } else {
+        posBtn := getPositionFromAspectRatioUV(StorageSearchUV[1], StorageSearchUV[2], storageAspectRatio)
+    }
+    ClickMouse(posBtn[1], posBtn[2])
+
+    Sleep, 100
+    clickMenuButton(1)
+}
+
+useItem(itemName, useAmount := 1) {
+    updateStatus("Using items")
+    logMessage("Using item: " itemName, 1)
+
+    ; Open Inventory
+    clickMenuButton(3)
+    waitForInvVisible()
+
+    ; Select Items tab
+    itemTab := getPositionFromAspectRatioUV(0.564405, -0.451327, storageAspectRatio)
+    ClickMouse(itemTab[1], itemTab[2])
+
+    ; Search for item
+    searchBar := getPositionFromAspectRatioUV(0.56, -0.39, storageAspectRatio)
+    ClickMouse(searchBar[1], searchBar[2])
+    SendInput, % itemName
+    Sleep, 200
+
+    ; Select item
+    selectItem := getPositionFromAspectRatioUV(-0.18, -0.25, storageAspectRatio)
+    ClickMouse(selectItem[1], selectItem[2])
+
+    ; Update quantity - Must be done each time to reset amount from previous item
+    updateQuantity:= getPositionFromAspectRatioUV(-0.70, 0.12, storageAspectRatio)
+    ClickMouse(updateQuantity[1], updateQuantity[2])
+    Send, % useAmount
+    Sleep, 200
+
+    ; Click Use
+    clickUse:= getPositionFromAspectRatioUV(-0.46, 0.12, storageAspectRatio)
+    ClickMouse(clickUse[1], clickUse[2])
+
+    ; Clear search result
+    ClickMouse(searchBar[1], searchBar[2])
+
+    ; Close inventory
     clickMenuButton(3)
     Sleep, 200
 }
@@ -1319,44 +2131,87 @@ checkBottomLeft(){
     Gdip_DisposeEffect(readEffect1)
 }
 
-getUnixTime(){
+getUnixTime() {
     now := A_NowUTC
-    EnvSub, now,1970, seconds
+    EnvSub, now, 1970, seconds
     return now
 }
 
-
 closeRoblox(){
-    WinClose, Roblox
+    WinClose, % "ahk_id " . GetRobloxHWND()
     WinClose, % "Roblox Crash"
 }
 
-playBitMap := Gdip_CreateBitmapFromFile(imgDir . "play.png")
+isGameNameVisible() {
+    getRobloxPos(pX,pY,width,height)
 
-isPlayButtonOpen(){
-    global playBitMap
+    ; Game Logo/Name
+    x := pX + (width * 0.25)
+    y := pY + (height * 0.05)
+    w := width // 5
+    h := height // 5
 
+    colors := [0xD356FF, 0x8528FF, 0x140E46, 0x000000] ; Lavender, Purple, Dark Blue, Black
+    variation := 10
+
+    foundColors := 0
+
+    ; Search for each color in the defined area
+    for color in colors {
+        PixelSearch, FoundX, FoundY, x, y, x + w, y + h, color, variation, Fast RGB
+        if (ErrorLevel = 0) {
+            foundColors++
+            logMessage("[GameName] Color " color " found at " FoundX ", " FoundY)
+            Highlight(FoundX-5, FoundY-5, 10, 10, 5000, "Yellow") ; Temporary for debug
+        } else {
+            return false
+        }
+    }
+    if (foundColors = colors.Length()) {
+        logMessage("[GameName] Colors found: " foundColors " out of " colors.Length())
+        Highlight(x, y, w, h, 2500) ; Temporary for debug
+        return true
+    }
+    return false
+}
+
+getPlayButtonColorRatio() {
     getRobloxPos(pX,pY,width,height)
     
-    targetW := height*0.025
-    startX := width*0.5 - targetW/2
-    retrievedMap := Gdip_BitmapFromScreen(pX + startX "|" pY + height*0.575 "|" targetW "|" height*0.05)
+    ; Play Button Text
+    targetW := height * 0.15
+    startX := width * 0.5 - targetW * 0.55
+    x := pX + startX
+    y := pY + height * 0.8
+    w := targetW * 1.1
+    h := height * 0.1
+    ; OutputDebug, % x ", " y ", " w ", " h
+    ; Highlight(x, y, w, h, 5000)
+
+    retrievedMap := Gdip_BitmapFromScreen(x "|" y "|" w "|" h)
+    ; Gdip_SaveBitmapToFile(retrievedMap, "retrievedMap.png")
     effect := Gdip_CreateEffect(5,-60,80)
     Gdip_BitmapApplyEffect(retrievedMap,effect)
-    playMap := Gdip_ResizeBitmap(retrievedMap,30,30,0)
+    ; Gdip_SaveBitmapToFile(retrievedMap, "retrievedMap_effect.png")
+    playMap := Gdip_ResizeBitmap(retrievedMap,32,32,0)
+    ; Gdip_SaveBitmapToFile(playMap, "playMap.png")
+    Gdip_GetImageDimensions(playMap, Width, Height)
+    ; OutputDebug, % "playMap dimensions: " Width "w x " Height "h"
 
     blackPixels := 0
     whitePixels := 0
 
-    Loop % 30 {
+    Loop, %Width% {
         tX := A_Index-1
-        Loop % 30 {
+        Loop, %Height% {
             tY := A_Index-1
             pixelColor := Gdip_GetPixel(playMap, tX, tY)
             blackPixels += compareColors(pixelColor,0x000000) < 32
             whitePixels += compareColors(pixelColor,0xffffff) < 32
         }
     }
+    ; OutputDebug, % "Black Pixels: " blackPixels
+    ; OutputDebug, % "White Pixels: " whitePixels
 
     Gdip_DisposeEffect(effect)
     Gdip_DisposeBitmap(playMap)
@@ -1364,112 +2219,344 @@ isPlayButtonOpen(){
     
     if (whitePixels > 30 && blackPixels > 30){
         ratio := whitePixels/blackPixels
+        OutputDebug, % "ratio: " ratio "`n"
 
-        return (ratio > 0.35) && (ratio < 0.65)
+        ; return (ratio > 0.35) && (ratio < 0.65)
+        return ratio
+    }
+    return 0
+}
+
+isPlayButtonVisible(){ ; Era 8 Play button: 750,860,420,110 (covers movement area)
+    getRobloxPos(pX,pY,width,height)
+
+    ; Play Button Area
+    targetW := height * 0.3833
+    startX := width * 0.5 - targetW * 0.55
+    x := pX + startX
+    y := pY + height * 0.8
+    w := targetW * 1.1
+    h := height * 0.1
+
+    if (containsText(x, y, w, h, "Play") || containsText(x, y, w, h, "Ploy")) { ; Add commonly detected misspelling
+        logMessage("[isPlayButtonVisible] Play button detected with OCR")
+        return true
+    }
+
+    ; Check again after delay to avoid false positives
+    ; if (isGameNameVisible()) {
+    ;     Sleep, 5000
+    ;     return isGameNameVisible()
+    ; }
+
+    ; Compare after 5 checks to rule out false positives
+    ratioSum := 0
+    Loop, 5 {
+        ratioSum += getPlayButtonColorRatio()
+    }
+    ratioAvg := ratioSum / 5
+    if (ratioAvg >= 0.09 && ratioAvg <= 0.13) {
+        logMessage("[isPlayButtonVisible] Color Ratio: " ratioAvg " (Average of 5 checks)")
+        return true
+    }
+    return false
+}
+
+; Assumes button was previously detected using isPlayButtonVisible()
+ClickPlay() {
+    updateStatus("Game Loaded")
+
+    StopPaths()
+    getRobloxPos(pX,pY,width,height)
+
+    rHwnd := GetRobloxHWND()
+    if (rHwnd) {
+        WinActivate, ahk_id %rHwnd%
+    }
+    
+    ; Click Play
+    ClickMouse(pX + (width*0.5), pY + (height*0.85))
+    Sleep, 10000
+
+    ; Skip existing aura prompt
+    ClickMouse(pX + (width*0.6), pY + (height*0.85))
+    Sleep, 2000
+    
+    ; Enable Auto Roll - Completely removed from Initialize() to avoid toggling when macro is restarted, but game is not
+    ClickMouse(pX + (width*0.35), pY + (height*0.95))
+
+    ; Enable Merchant Tracker - Introduced Era 8.5 Update
+    ; No harm if user doesn't own
+    Sleep, 2000
+    useItem("Merchant Tracker")
+}
+
+; Clear RAM by restarting Roblox
+; Used with Reconnect setting to relaunch game
+ClearRAM() {
+    ; Abort conditions
+    if (!options.RestartRobloxEnabled || !options.ReconnectEnabled || !running) {
+        return 0
+    }
+
+    updateStatus("Restarting Roblox to clear RAM")
+    sleep, 2000
+    rHwnd := GetRobloxHWND()
+    if (rHwnd) {
+        WinClose, ahk_id %rHwnd%
+    }
+    attemptReconnect()
+    
+    return 1 ; Notify calling function that Roblox was restarted
+}
+
+; Enable Auto Roll - OCR detect if Auto Roll is OFF and click to enable
+enableAutoRoll() {
+    getRobloxPos(pX,pY,width,height)
+
+    btnX := pX + (width*0.35)
+    btnY := pY + (height*0.95)
+    if (containsText(btnX - 100, btnY - 25, 200, 50, "OFF")) {
+        ClickMouse(btnX, btnY)
+    }
+}
+
+ReceiveFromStatus(wParam, lParam) {
+    StringAddress := NumGet(lParam + 2*A_PtrSize)
+    CopyDataSize := NumGet(lParam + A_PtrSize)
+
+    VarSetCapacity(ReceivedData, CopyDataSize)
+    DllCall("RtlMoveMemory", "Ptr", &ReceivedData, "Ptr", StringAddress, "Ptr", CopyDataSize)
+    
+    ; Ensure null termination for the string
+    ReceivedData := StrGet(&ReceivedData, CopyDataSize/2)
+
+    currentBiome := ReceivedData
+    logMessage("New Biome: " currentBiome)
+}
+
+LogError(exc) {
+    logMessage("[LogError] Error on line " exc.Line ": " exc.Message)
+    try webhookPost({embedContent: "[Error - Main.ahk - Line " exc.Line "]: " exc.Message, embedColor: statusColors["Roblox Disconnected"]})
+}
+
+logMessage(message, indent := 0) {
+    global loggingEnabled, mainDir, lastLoggedMessage
+    maxLogSize := 1048576 ; 1 MB
+
+    if (!loggingEnabled) {
+        return
+    }
+
+    ; Sanitize message
+    message := StrReplace(message, options.WebhookLink, "*WebhookLink*")
+
+
+    ; Avoid logging the same message again
+    if (message = lastLoggedMessage) {
+        return
+    }
+    
+    logFile := mainDir . "\lib\macro_log.txt"
+    try {
+        ; Check the log file size and truncate if necessary
+        if (FileExist(logFile) && FileGetSize(logFile) > maxLogSize) {
+            FileDelete, %logFile%
+        }
+
+        if (indent) {
+            message := "    " . message
+        }
+        FormatTime, fTime, , hh:mm:ss
+        FileAppend, % fTime " " message "`n", %logFile%
+        OutputDebug, % fTime " " message
+
+        ; Update the last logged message
+        lastLoggedMessage := message
+    } catch e {
+        ; TODO: handle gracefully
+        ; ignore error popup for now
+    }
+}
+
+; Function to get the size of a file
+FileGetSize(filePath) {
+    FileGetSize, fileSize, %filePath%
+    return fileSize
+}
+
+; Check if area contains the specified text
+containsText(x, y, width, height, text) {
+    ; Potential improvement by ignoring non-alphanumeric characters
+    ; Highlight(x-10, y-10, width+20, height+20, 2000)
+    
+    try {
+        pbm := Gdip_BitmapFromScreen(x "|" y "|" width "|" height)
+        pbm := Gdip_ResizeBitmap(pbm,500,500,true)
+        ocrText := ocrFromBitmap(pbm)
+        Gdip_DisposeBitmap(pbm)
+
+        if (!ocrText) {
+            return false
+        }
+        ocrText := RegExReplace(ocrText,"(\n|\r)+"," ")
+        StringLower, ocrText, ocrText
+        StringLower, text, text
+        textFound := InStr(ocrText, text)
+        if (textFound > 0) { ; Reduce logging by only saving when found
+            logMessage("[containsText] Searching: " text "  |  Found: '" ocrText "'", 1)
+        }
+
+        return textFound > 0
+    } catch e {
+        logMessage("[containsText] Error searching '" text "': `n" e, 1)
+        return -1
     }
 }
 
 attemptReconnect(failed := 0){
+    logMessage("[attemptReconnect] Reconnect check - Fail count: " failed)
     initialized := 0
     if (reconnecting && !failed){
         return
     }
     if (!options.ReconnectEnabled){
+        logMessage("[attemptReconnect] Reconnect not enabled. Stopping...", 1)
         stop()
         return
     }
     reconnecting := 1
+    macroStarted := 0
     success := 0
+    
+    ; stop(0, 1)
+    StopPaths()
     closeRoblox()
+
     updateStatus("Reconnecting")
     Sleep, 5000
     Loop 5 {
         Sleep, % (A_Index-1)*10000
-        if (options.PrivateServerId && A_Index < 4){
-            try Run % """roblox://placeID=15532962292&linkCode=" options.PrivateServerId """"
-        } else {
-            try Run % """roblox://placeID=15532962292"""
+        try {
+            if (options.PrivateServerId && A_Index < 4){
+                Run % """roblox://placeID=15532962292&linkCode=" options.PrivateServerId """"
+            } ;else {
+                ; Run % """roblox://placeID=15532962292""" ; Public lobby bad!
+            ; }
+        } catch e {
+            logMessage("[attemptReconnect] Unable to open Private Server. Error: " e.message)
+            continue
         }
+
         Loop 240 {
             rHwnd := GetRobloxHWND()
-            if (rHwnd){
+            if (rHwnd) {
                 WinActivate, ahk_id %rHwnd%
+                updateStatus("Roblox Opened")
+                logMessage("[attemptReconnect] Detected Roblox opened at loop " A_Index, 1)
                 break
             }
-            if (A_Index == 240){
+            if (A_Index == 240) { 
+                logMessage("[attemptReconnect] Unable to get Roblox HWND.")
+                Sleep, 10000
                 continue 2
             }
             Sleep 1000
         }
-        updateStatus("Reconnecting, Roblox Opened")
-        Sleep, 3000
+
         Loop 120 {
             getRobloxPos(pX,pY,width,height)
 
             valid := 0
-            if (isPlayButtonOpen()){
+            if (isPlayButtonVisible()){
                 Sleep, 2000
-                valid := isPlayButtonOpen()
+                valid := isPlayButtonVisible()
             }
             
             if (valid){
-                MouseMove, % pX + (width/2), % pY + height*0.6
-                Sleep, 300
-                MouseClick
+                ClickPlay()
                 break
             }
 
-            if (A_Index == 120 || !GetRobloxHWND()){
+            if (A_Index == 120 || !GetRobloxHWND()) {
+                logMessage("[attemptReconnect] Play button not found or Roblox closed.")
                 continue 2
             }
             Sleep 1000
         }
-        updateStatus("Reconnecting, Game Loaded")
-        Sleep, 10000
-        getRobloxPos(pX,pY,width,height)
-        MouseMove, % pX + (width*0.6), % pY + (height*0.85)
-        Sleep, 300
-        MouseClick
-        Sleep, 100
-        MouseMove, % pX + (width*0.35), % pY + (height*0.95)
-        Sleep, 300
-        MouseClick
+
+        options.LastRobloxRestart := getUnixTime() ; Reset timer
         updateStatus("Reconnect Complete")
         success := 1
         break
     }
+
     if (success){
         reconnecting := 0
     } else {
-        Sleep, 30000
-        attemptReconnect(1)
+        if (failed < 3) { ; Limit the number of attempts to prevent infinite recursion
+            Sleep, 30000
+            attemptReconnect(failed + 1)
+        } else {
+            updateStatus("Reconnect Failed")
+            logMessage("[attemptReconnect] Failed to reconnect after multiple attempts.")
+            reconnecting := 0
+        }
     }
 }
 
 checkDisconnect(wasChecked := 0){
+    logMessage("[checkDisconnect] Checking for disconnect")
     getRobloxPos(windowX, windowY, windowWidth, windowHeight)
+
+    ; if (options.OCREnabled) {
+    if (containsText(890, 425, 135, 25, "Disconnected")) { ; 1025, 450
+        logMessage("[checkDisconnect] 'Disconnected' popup found with OCR")
+        updateStatus("Roblox Disconnected")
+        options.Disconnects += 1
+        return 1
+    }
+        ; return 0 ; Commented out to allow secondary check below
+    ; }
+
 	if ((windowWidth > 0) && !WinExist("Roblox Crash")) {
 		pBMScreen := Gdip_BitmapFromScreen(windowX+(windowWidth/4) "|" windowY+(windowHeight/2) "|" windowWidth/2 "|1")
         matches := 0
         hW := windowWidth/2
 		Loop %hW% {
             matches += (compareColors(Gdip_GetPixelColor(pBMScreen,A_Index-1,0,1),0x393b3d) < 8)
-            if (matches >= 128){
+            if (matches >= 128) {
+                logMessage("[checkDisconnect] High probability of Disconnect screen found after " A_Index " loops", 1)
                 break
             }
         }
         Gdip_DisposeBitmap(pBMScreen)
-        if (matches < 128){
+        if (matches < 128) {
             return 0
         }
 	}
-    if (wasChecked){
+    if (wasChecked) {
         updateStatus("Roblox Disconnected")
         options.Disconnects += 1
         return 1
     } else {
         Sleep, 3000
         return checkDisconnect(1)
+    }
+}
+
+RemoveTooltip(interval) {
+    SetTimer, ClearToolTip, % -interval * 1000
+}
+
+; Closes all "instance already running" alerts
+CloseBSAlerts() {
+    WinGet, id, List, Bloxstrap ahk_exe Bloxstrap.exe
+    Loop, %id% {
+        this_id := id%A_Index%
+        PostMessage, 0x0112, 0xF060,,, % "ahk_id" this_id ; 0x0112 = WM_SYSCOMMAND, 0xF060 = SC_CLOSE
+
+        logMessage("[Bloxstrap Alert] Closed popup " this_id, 1)
     }
 }
 
@@ -1484,63 +2571,133 @@ MsgBox, % ocrFromBitmap(pbm2)
 ExitApp
 */
 
+reconnectTimeout := 60000 ; 60 seconds
 mainLoop(){
     Global
-    if (reconnecting){
+    if (reconnecting) { ; TODO: Avoid infinite loop from reconnect error
+        Sleep, 1000
         return
+
+        ; Track the start time
+        ; startTime := A_TickCount
+
+        ; ; Loop until reconnecting is false or timeout is exceeded
+        ; while (!GetRobloxHWND()) {
+        ;     Sleep, 15000
+        ;     elapsedTime := A_TickCount - startTime
+        ;     if (elapsedTime > reconnectTimeout) {
+        ;         ; Log an error and take appropriate action
+        ;         logMessage("[Error] Reconnect timeout exceeded. Please check the program status.", 1)
+        ;         attemptReconnect(1)
+        ;         return
+        ;     }
+        ; }
     }
+
     currentId := GetRobloxHWND()
     if (!currentId){
+        logMessage("[mainLoop] Roblox not found. Attempting to reconnect.")
         attemptReconnect()
         return
     } else if (currentId != robloxId){
+        logMessage("[mainLoop] New Roblox window found. Switching..")
         OutputDebug, "Window switched"
         robloxId := currentId
     }
 
     if (checkDisconnect()){
+        logMessage("[mainLoop] Roblox disconnected. Attempting to reconnect.")
         attemptReconnect()
         return
     }
 
-    MouseGetPos, mouseX, mouseY
-    local TLCornerX, TLCornerY, width, height
-    getRobloxPos(TLCornerX, TLCornerY, width, height)
-    BRCornerX := TLCornerX + width
-    BRCornerY := TLCornerY + height
-    statusEffectHeight := Floor((height/1080)*54)
+    ; Restart Roblox to clear RAM
+    if (options.RestartRobloxEnabled && getUnixTime()-options.LastRobloxRestart >= (options.RestartRobloxInterval*60*60)) {
+        if (ClearRAM()) {
+            return
+        }
+    }
 
     WinActivate, ahk_id %robloxId%
+
+    ; Checks to avoid idling
+    CloseBSAlerts() ; Prevent infinite Bloxstrap error popups
+    
+    if (isPlayButtonVisible()) {
+        ClickPlay()
+    }
+	
+    enableAutoRoll() ; Check after ClickPlay to make sure not left off due to lag, etc
+
+    ; Equip preferred aura
+    if (options.AutoEquipEnabled) {
+        EquipAura(options.AutoEquipAura)
+    }
     
     if (!initialized){
         updateStatus("Initializing")
         initialize()
     }
 
-    tMX := width/2
-    tMY := height/2
-
     mouseActions()
     
     Sleep, 250
 
-    if (options.InvScreenshotsEnabled && getUnixTime()-options.LastInvScreenshot >= (options.ScreenshotInterval*60)){
-        options.LastInvScreenshot := getUnixTime()
+    ; Reset to spawn before taking screenshots or using items
+    ; reset()
+    
+    ; Attempt to claim quests every 30 minutes
+    if (options.ClaimDailyQuests && !lastClaim || A_TickCount - lastClaim > 1800000) {
+        ClaimQuests()
+        lastClaim := A_TickCount
+    }
 
+    ; Take Screenshots - Aura Storage, Item Inventory, Quests
+    if (options.InvScreenshotsEnabled && getUnixTime()-options.LastInvScreenshot >= (options.ScreenshotInterval*60)) {
+        options.LastInvScreenshot := getUnixTime()
         screenshotInventories()
     }
 
     Sleep, 250
 
-    if (getUnixTime()-options.LastCraftSession >=  options.CraftingInterval*60){
-        options.LastCraftSession := getUnixTime()
-        
-        handleCrafting()
+    ; Run Item Scheduler entries
+    currentUnixTime := getUnixTime()
+    for each, entry in ItemSchedulerEntries {
+        if (entry.Enabled && currentUnixTime >= entry.NextRunTime) {
+            ; Account for biome
+            if (!entry.Biome || entry.Biome == "Any" || entry.Biome == currentBiome) { ; !entry.Biome check needed for pre-Biome legacy entries
+                ; Use specified number of item
+                UseItem(entry.ItemName, entry.Quantity)
+
+                ; Update the NextRunTime for the next scheduled run
+                frequencyInSeconds := entry.Frequency * (entry.TimeUnit = "Minutes" ? 60 : 3600)
+                nextRunTime := currentUnixTime + frequencyInSeconds
+                entry.NextRunTime := nextRunTime
+            }
+        }
+    }
+
+    Sleep, 250
+
+    if (options.PotionCraftingEnabled || options.ItemCraftingEnabled){
+        if (getUnixTime()-options.LastCraftSession >= (options.CraftingInterval*60)) {
+            options.LastCraftSession := getUnixTime()
+            handleCrafting()
+        }
     }
     
     if (options.DoingObby && (A_TickCount - lastObby) >= (obbyCooldown*1000)){
-        align()
+        ; align()
+        reset()
         obbyRun()
+
+        ; MouseGetPos, mouseX, mouseY
+        local TLCornerX, TLCornerY, width, height
+        getRobloxPos(TLCornerX, TLCornerY, width, height)
+        BRCornerX := TLCornerX + width
+        BRCornerY := TLCornerY + height
+        statusEffectHeight := Floor((height/1080)*54)
+
         hasBuff := checkHasObbyBuff(BRCornerX,BRCornerY,statusEffectHeight)
         Sleep, 1000
         hasBuff := hasBuff || checkHasObbyBuff(BRCornerX,BRCornerY,statusEffectHeight)
@@ -1550,7 +2707,7 @@ mainLoop(){
         }
         if (!hasBuff)
         {
-            align()
+            ; align()
             updateStatus("Obby Failed, Retrying")
             lastObby := A_TickCount - obbyCooldown*1000
             obbyRun()
@@ -1580,185 +2737,370 @@ mainLoop(){
     */
 }
 
-
+CreateMainUI() {
+    global
 
 ; main ui
+    try {
+        Menu Tray, Icon, % mainDir "images\dSM.ico" ; Use icon if available
+    } catch {
+        Menu Tray, Icon, shell32.dll, 3
+    }
 
-Menu Tray, Icon, shell32.dll, 3
+    Gui mainUI: New, +hWndhGui
+    Gui Color, 0xDADADA
+    Gui Add, Button, gStartClick vStartButton x8 y224 w80 h23 -Tabstop, F1 - Start
+    Gui Add, Button, gPauseClick vPauseButton x96 y224 w80 h23 -Tabstop, F2 - Pause
+    Gui Add, Button, gStopClick vStopButton x184 y224 w80 h23 -Tabstop, F3 - Stop
+    Gui Add, CheckBox, vOwnPrivateServerCheckBox x300 y224 h23 +0x2, % "In your own Private Server?"
+    Gui Font, s11 Norm, Segoe UI
+    Gui Add, Picture, gDiscordServerClick w26 h20 x462 y226, % mainDir "images\discordIcon.png"
 
-Gui, Color, 0x000000
+    Gui Add, Tab3, vMainTabs x8 y8 w484 h210 +0x800000, Main|Crafting|Status|Settings|Credits|Extras
 
-Gui mainUI: New, +hWndhGui
-Gui Color, 0xDADADA
-Gui Add, Button, gStartClick vStartButton x8 y224 w80 h23, F1 - Start
-Gui Add, Button, gPauseClick vPauseButton x96 y224 w80 h23, F2 - Pause
-Gui Add, Button, gStopClick vStopButton x184 y224 w80 h23, F3 - Stop
-Gui Font, s11 Norm, Segoe UI
-Gui Add, Picture, gDiscordServerClick w26 h20 x462 y226, % mainDir "images\discordIcon.png"
+    ; main tab
+    Gui Tab, 1
 
-Gui Add, Tab3, vMainTabs x8 y8 w484 h210 +0x800000, Main|Crafting|Status|Settings|Credits
-; main tab
-Gui Tab, 1
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y40 w231 h70 vObbyOptionGroup -Theme +0x50000007, Obby
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vObbyCheckBox x32 y59 w180 h26 +0x2, % " Do Obby (Every 2 Mins)"
+    Gui Add, CheckBox, vObbyBuffCheckBox x32 y80 w200 h26 +0x2, % " Check for Obby Buff Effect"
+    Gui Add, Button, gObbyHelpClick vObbyHelpButton x221 y50 w23 h23, ?
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y40 w231 h70 vObbyOptionGroup -Theme +0x50000007, Obby
-Gui Font, s9 norm
-Gui Add, CheckBox, vObbyCheckBox x32 y59 w180 h26 +0x2, % " Do Obby (Every 2 Mins)"
-Gui Add, CheckBox, vObbyBuffCheckBox x32 y80 w200 h26 +0x2, % " Check for Obby Buff Effect"
-Gui Add, Button, gObbyHelpClick vObbyHelpButton x221 y50 w23 h23, ?
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x252 y40 w231 h70 vAutoEquipGroup -Theme +0x50000007, Auto Equip
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vAutoEquipCheckBox x268 y61 w190 h22 +0x2, % " Enable Auto Equip"
+    Gui Add, Button, +gShowAuraEquipSearch x268 y83 w115 h22, Configure Search
+    Gui Add, Button, gAutoEquipHelpClick vAutoEquipHelpButton x457 y50 w23 h23, ?
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x252 y40 w231 h70 vAutoEquipGroup -Theme +0x50000007, Auto Equip
-Gui Font, s9 norm
-Gui Add, CheckBox, vAutoEquipCheckBox x268 y61 w190 h22 +0x2, % " Enable Auto Equip"
-Gui Add, Button, gAutoEquipSlotSelectClick vAutoEquipSlotSelectButton x268 y83 w115 h22, Select Storage Slot
-Gui Add, Button, gAutoEquipHelpClick vAutoEquipHelpButton x457 y50 w23 h23, ?
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y110 w467 h100 vCollectOptionGroup -Theme +0x50000007, Item Collecting
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vCollectCheckBox x32 y129 w261 h26 +0x2, % " Collect Items Around the Map"
+    Gui Add, Button, gCollectHelpClick vCollectHelpButton x457 y120 w23 h23, ?
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y110 w467 h100 vCollectOptionGroup -Theme +0x50000007, Item Collecting
-Gui Font, s9 norm
-Gui Add, CheckBox, vCollectCheckBox x32 y129 w261 h26 +0x2, % " Collect Items Around the Map"
-Gui Add, Button, gCollectHelpClick vCollectHelpButton x457 y120 w23 h23, ?
+    Gui Add, GroupBox, x26 y155 w447 h48 vCollectSpotsHolder -Theme +0x50000007, Collect From Spots
+    Gui Add, CheckBox, vCollectSpot1CheckBox x42 y174 w30 h26 +0x2 -Tabstop, % " 1"
+    Gui Add, CheckBox, vCollectSpot2CheckBox x82 y174 w30 h26 +0x2 -Tabstop, % " 2"
+    Gui Add, CheckBox, vCollectSpot3CheckBox x122 y174 w30 h26 +0x2 -Tabstop, % " 3"
+    Gui Add, CheckBox, vCollectSpot4CheckBox x162 y174 w30 h26 +0x2 -Tabstop, % " 4"
+    Gui Add, CheckBox, vCollectSpot5CheckBox x202 y174 w30 h26 +0x2 -Tabstop, % " 5"
+    Gui Add, CheckBox, vCollectSpot6CheckBox x242 y174 w30 h26 +0x2 -Tabstop, % " 6"
+    Gui Add, CheckBox, vCollectSpot7CheckBox x282 y174 w30 h26 +0x2 -Tabstop, % " 7"
 
-Gui Add, GroupBox, x26 y155 w447 h48 vCollectSpotsHolder -Theme +0x50000007, Collect From Spots
-Gui Add, CheckBox, vCollectSpot1CheckBox x42 y174 w30 h26 +0x2, % " 1"
-Gui Add, CheckBox, vCollectSpot2CheckBox x82 y174 w30 h26 +0x2, % " 2"
-Gui Add, CheckBox, vCollectSpot3CheckBox x122 y174 w30 h26 +0x2, % " 3"
-Gui Add, CheckBox, vCollectSpot4CheckBox x162 y174 w30 h26 +0x2, % " 4"
-Gui Add, CheckBox, vCollectSpot5CheckBox x202 y174 w30 h26 +0x2, % " 5"
-Gui Add, CheckBox, vCollectSpot6CheckBox x242 y174 w30 h26 +0x2, % " 6"
-Gui Add, CheckBox, vCollectSpot7CheckBox x282 y174 w30 h26 +0x2, % " 7"
+    ; crafting tab
+    Gui Tab, 2
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y40 w231 h110 vItemCraftingGroup -Theme +0x50000007, Item Crafting
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vItemCraftingCheckBox x32 y58 w190 h22 +Disabled, % " Automatic Item Crafting"
+    Gui Font, s9 w600
+    Gui Add, GroupBox, x21 y80 w221 h65 vItemCraftingOptionsGroup -Theme +0x50000007, Crafting Options
 
-; crafting tab
-Gui Tab, 2
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y40 w231 h110 vItemCraftingGroup -Theme +0x50000007, Item Crafting
-Gui Font, s9 norm
-Gui Add, CheckBox, vItemCraftingCheckBox x32 y58 w190 h22 +0x2, % " Automatic Item Crafting"
-Gui Font, s9 w600
-Gui Add, GroupBox, x21 y80 w221 h65 vItemCraftingOptionsGroup -Theme +0x50000007, Crafting Options
-Gui Font, s9 norm
-Gui Add, CheckBox, vCraftGildedCoinCheckBox x37 y98 w190 h22 +0x2, % " Gilded Coin"
+    ; Potion Crafting Settings
+    potionSlotOptions := "None||Fortune Potion I|Fortune Potion II|Fortune Potion III|Haste Potion I|Haste Potion II|Haste Potion III|Heavenly Potion I|Heavenly Potion II"
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x252 y40 w231 h170 vPotionCraftingGroup -Theme +0x50000007, Potion Crafting
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vPotionCraftingCheckBox x268 y58 w200 h22 +0x2, % " Automatic Potion Crafting"
+    Gui Add, CheckBox, vPotionAutoAddCheckBox x268 y78 w200 h22 +0x2, % " Use Auto Add (Cycles Slots)"
+    
+    ; Potion Crafting Slots
+    Gui Font, s9 w600
+    Gui Add, GroupBox, x257 y100 w221 h105 vPotionCraftingSlotsGroup -Theme +0x50000007, Crafting Slots
+    Gui Font, s9 norm
+    Gui Add, Text, x270 y122 w100 h16 vItemCraftingSlot1Header BackgroundTrans, Slot 1:
+    Gui Add, DropDownList, x312 y118 w120 h10 vPotionCraftingSlot1DropDown R9, % potionSlotOptions
+    Gui Add, Text, x270 y152 w100 h16 vItemCraftingSlot2Header BackgroundTrans, Slot 2:
+    Gui Add, DropDownList, x312 y148 w120 h10 vPotionCraftingSlot2DropDown R9, % potionSlotOptions
+    Gui Add, Text, x270 y182 w100 h16 vItemCraftingSlot3Header BackgroundTrans, Slot 3:
+    Gui Add, DropDownList, x312 y178 w120 h10 vPotionCraftingSlot3DropDown R9, % potionSlotOptions
 
-potionSlotOptions := "None||Fortune Potion I|Haste Potion I|Heavenly Potion I|Universe Potion I|Fortune Potion II|Haste Potion II|Heavenly Potion II|Fortune Potion III"
-Gui Font, s10 w600
-Gui Add, GroupBox, x252 y40 w231 h170 vPotionCraftingGroup -Theme +0x50000007, Potion Crafting
-Gui Font, s9 norm
-Gui Add, CheckBox, vPotionCraftingCheckBox x268 y58 w200 h22 +0x2, % " Automatic Potion Crafting"
-Gui Font, s9 w600
-Gui Add, GroupBox, x257 y80 w221 h125 vPotionCraftingSlotsGroup -Theme +0x50000007, Crafting Slots
-Gui Font, s9 norm
-Gui Add, Text, x270 y107 w100 h16 vItemCraftingSlot1Header BackgroundTrans, Slot 1:
-Gui Add, DropDownList, x312 y103 w120 h10 vPotionCraftingSlot1DropDown R9, % potionSlotOptions
-Gui Add, Text, x270 y140 w100 h16 vItemCraftingSlot2Header BackgroundTrans, Slot 2:
-Gui Add, DropDownList, x312 y136 w120 h10 vPotionCraftingSlot2DropDown R9, % potionSlotOptions
-Gui Add, Text, x270 y173 w100 h16 vItemCraftingSlot3Header BackgroundTrans, Slot 3:
-Gui Add, DropDownList, x312 y169 w120 h10 vPotionCraftingSlot3DropDown R9, % potionSlotOptions
+    ; Crafting Interval
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y150 w231 h60 vCraftingIntervalGroup -Theme +0x50000007, Crafting Intervals
+    Gui Font, s9 norm
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y150 w231 h60 vCraftingIntervalGroup -Theme +0x50000007, Crafting Interval
-Gui Font, s10 norm
-Gui Add, Text, x32 y170 w170 h35 vCraftingIntervalText BackgroundTrans, Craft every              minutes
-Gui Font, s9 norm
-Gui Add, Edit, x100 y171 w45 h18 vCraftingIntervalInput, 10
-Gui Add, UpDown, vCraftingIntervalUpDown Range1-300, 10
+    Gui Add, Text, x32 y170 h35 vCraftingIntervalText BackgroundTrans Section, Craft every
+    Gui Add, Edit, ys wp w45 h18 vCraftingIntervalInput Number, 10
+    Gui Add, UpDown, vCraftingIntervalUpDown Range1-300, 10
+    Gui Add, Text, ys wp w60 h35 BackgroundTrans, minutes
 
+    Gui Add, Text, x32 y190 h35 vPotionAutoAddIntervalText BackgroundTrans Section, Auto Add every
+    Gui Add, Edit, ys wp w45 h18 vPotionAutoAddIntervalInput Number, 10
+    Gui Add, UpDown, vPotionAutoAddIntervalUpDown Range1-300, 10
+    Gui Add, Text, ys wp w60 h35 BackgroundTrans, minutes
 
+    ; status tab
+    Gui Tab, 3
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y40 w130 h170 vStatsGroup -Theme +0x50000007, Stats
+    Gui Font, s8 norm
+    Gui Add, Text, vStatsDisplay x22 y58 w118 h146, runtime: 123`ndisconnects: 1000
 
-; status tab
-Gui Tab, 3
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y40 w130 h170 vStatsGroup -Theme +0x50000007, Stats
-Gui Font, s9 norm
-Gui Add, Text, vStatsDisplay x22 y58 w118 h146, runtime: 123`ndisconnects: 1000
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x151 y40 w200 h170 vWebhookGroup -Theme +0x50000007, Discord Webhook
+    Gui Font, s7.5 norm
+    Gui Add, CheckBox, vWebhookCheckBox x166 y63 w120 h16 +0x2 gEnableWebhookToggle, % " Enable Webhook"
+    Gui Add, Text, x161 y85 w100 h20 vWebhookInputHeader BackgroundTrans, Webhook URL:
+    Gui Add, Edit, x166 y103 w169 h18 vWebhookInput,% ""
+    Gui Add, Button, gWebhookHelpClick vWebhookHelpButton x325 y50 w23 h23, ?
+    Gui Add, CheckBox, vWebhookImportantOnlyCheckBox x166 y126 w140 h16 +0x2, % " Important events only"
+    Gui Add, Text, vWebhookUserIDHeader x161 y145 w150 h14 BackgroundTrans, % "Discord User ID (Pings):"
+    Gui Add, Edit, x166 y162 w169 h16 vWebhookUserIDInput,% ""
+    Gui Font, s7.4 norm
+    Gui Add, CheckBox, vWebhookInventoryScreenshots x161 y182 w130 h26 +0x2, % "Inventory Screenshots (mins)"
+    Gui Add, Edit, x294 y186 w50 h18
+    Gui Add, UpDown, vInvScreenshotinterval Range1-1440
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x151 y40 w200 h170 vWebhookGroup -Theme +0x50000007, Discord Webhook
-Gui Font, s7.5 norm
-Gui Add, CheckBox, vWebhookCheckBox x166 y63 w120 h16 +0x2 gEnableWebhookToggle, % " Enable Webhook"
-Gui Add, Text, x161 y85 w100 h20 vWebhookInputHeader BackgroundTrans, Webhook URL:
-Gui Add, Edit, x166 y103 w169 h18 vWebhookInput,% ""
-Gui Add, Button, gWebhookHelpClick vWebhookHelpButton x325 y50 w23 h23, ?
-Gui Add, CheckBox, vWebhookImportantOnlyCheckBox x166 y126 w140 h16 +0x2, % " Important events only"
-Gui Add, Text, vWebhookUserIDHeader x161 y145 w150 h14 BackgroundTrans, % "Discord User ID (Pings):"
-Gui Add, Edit, x166 y162 w169 h16 vWebhookUserIDInput,% ""
-Gui Font, s7.4 norm
-Gui Add, CheckBox, vWebhookInventoryScreenshots x161 y182 w130 h26 +0x2, % "Inventory Screenshots (mins)"
-Gui Add, Edit, x294 y186 w50 h18
-Gui Add, UpDown, vInvScreenshotinterval Range1-1440
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x356 y40 w127 h50 vStatusOtherGroup -Theme +0x50000007, Other
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vStatusBarCheckBox x366 y63 w110 h20 +0x2, % " Enable Status Bar"
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x356 y40 w128 h50 vStatusOtherGroup -Theme +0x50000007, Other
-Gui Font, s9 norm
-Gui Add, CheckBox, vStatusBarCheckBox x366 y63 w110 h20 +0x2, % " Enable Status Bar"
+    Gui Font, s9 w600
+    Gui Add, GroupBox, x356 y90 w127 h120 vRollDetectionGroup -Theme +0x50000007, Roll Detection
+    Gui Font, s8 norm
+    Gui Add, Button, gRollDetectionHelpClick vRollDetectionHelpButton x457 y99 w23 h23, ?
+    Gui Add, Text, vWebhookRollSendHeader x365 y110 w110 h16 BackgroundTrans, % "Send Minimum:"
+    Gui Add, Edit, vWebhookRollSendInput x370 y126 w102 h18, 10000
+    Gui Add, Text, vWebhookRollPingHeader x365 y146 w110 h16 BackgroundTrans, % "Ping Minimum:"
+    Gui Add, Edit, vWebhookRollPingInput x370 y162 w102 h18, 100000
+    Gui Add, CheckBox, vWebhookRollImageCheckBox gWebhookRollImageCheckBoxClick x365 y183 w90 h18, Aura Images
+    Gui Add, Picture, gShowAuraSettings vShowAuraSettingsIcon x458 y183 w20 h20, % mainDir "images\settingsIcon.png"
 
-Gui Font, s9 w600
-Gui Add, GroupBox, x356 y90 w128 h120 vRollDetectionGroup -Theme +0x50000007, Roll Detection
-Gui Font, s8 norm
-Gui Add, Button, gRollDetectionHelpClick vRollDetectionHelpButton x458 y99 w23 h23, ?
-Gui Add, Text, vWebhookRollSendHeader x365 y110 w110 h16 BackgroundTrans, % "Send Minimum:"
-Gui Add, Edit, vWebhookRollSendInput x370 y126 w102 h18, 10000
-Gui Add, Text, vWebhookRollPingHeader x365 y146 w110 h16 BackgroundTrans, % "Ping Minimum:"
-Gui Add, Edit, vWebhookRollPingInput x370 y162 w102 h18, 100000
-Gui Add, CheckBox, vWebhookRollImageCheckBox gWebhookRollImageCheckBoxClick x365 y183 w100 h18, Aura Images
+    ; Assign the g-label to the icon/button to show the Aura settings popup
+    GuiControl, +gShowAuraSettings, vShowAuraSettingsIcon
 
-; settings tab
-Gui Tab, 4
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y40 w467 h65 vGeneralSettingsGroup -Theme +0x50000007, General
-Gui Font, s9 norm
-Gui Add, CheckBox, vVIPCheckBox x32 y58 w150 h22 +0x2, % " VIP Gamepass Owned"
-Gui Add, CheckBox, vAzertyCheckBox x222 y58 w200 h22 +0x2, % " AZERTY Keyboard Layout"
-Gui Add, Text, x222 y82 w200 h18, % "Collection Back Button Y Offset:"
-Gui Add, Edit, x396 y81 w50 h18
-Gui Add, UpDown, vBackOffsetUpDown Range-500-500, 0
-Gui Add, Button, vImportSettingsButton gImportSettingsClick x30 y80 w130 h20, Import Settings
+    ; settings tab
+    Gui Tab, 4
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y40 w259 h170 vGeneralSettingsGroup -Theme +0x50000007, General
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vVIPCheckBox x32 y58 w150 h22 +0x2, % " VIP Gamepass Owned"
+    Gui Add, CheckBox, vAzertyCheckBox x32 y78 w200 h22 +0x2, % " AZERTY Keyboard Layout"
+    Gui Add, CheckBox, vClaimDailyQuestsCheckBox x32 y98 w200 h22 +0x2, % " Auto Claim Daily Quests (30 min)"
+    Gui Add, CheckBox, gShifterCheckBoxClick vShifterCheckBox x32 y118 w200 h22 +0x2, % " Abyssal Hunter Shifter Mode"
+    Gui Add, Text, x32 y141 w200 h22, % "Collection Back Button Y Offset:" ; increase by 30 to move down
+    Gui Add, Edit, x206 y140 w50 h18
+    Gui Add, UpDown, vBackOffsetUpDown Range-500-500, 0
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y105 w467 h105 vReconnectSettingsGroup -Theme +0x50000007, Reconnect
-Gui Font, s9 norm
-Gui Add, CheckBox, vReconnectCheckBox x32 y127 w300 h16 +0x2, % " Enable Reconnect (Will reconnect if you disconnect)"
-Gui Add, Text, x26 y148 w100 h20 vPrivateServerInputHeader BackgroundTrans, Private Server Link:
-Gui Add, Edit, x31 y167 w437 h20 vPrivateServerInput,% ""
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x280 y40 w203 h138 vReconnectSettingsGroup -Theme +0x50000007, Reconnect
+    Gui Font, s9 norm
 
+    ; Reconnect Options
+    Gui Add, CheckBox, x296 y61 w150 h16 +0x2 vReconnectCheckBox Section, % " Enable Reconnect"
 
-; credits tab
-Gui Tab, 5
-Gui Font, s10 w600
-Gui Add, GroupBox, x16 y40 w231 h133 vCreditsGroup -Theme +0x50000007, The Creator
-Gui Add, Picture, w75 h75 x23 y62, % mainDir "images\pfp.png"
-Gui Font, s12 w600
-Gui Add, Text, x110 y57 w130 h22,BuilderDolphin
-Gui Font, s8 norm italic
-Gui Add, Text, x120 y78 w80 h18,(dolphin)
-Gui Font, s8 norm
-Gui Add, Text, x115 y95 w124 h40,"This was supposed to be a short project to learn AHK..."
-Gui Font, s8 norm
-Gui Add, Text, x28 y145 w200 h32 BackgroundTrans,% "More to come soon perhaps..."
-Gui Add, Button, x28 y177 w206 h32 gMoreCreditsClick,% "More Credits"
+    ; Restart Roblox
+    Gui Add, CheckBox, x296 y81 h16 +0x2 vRestartRobloxCheckBox Section, % " Restart Roblox every"
+    Gui Add, Edit, x296 y101 w45 h18 vRestartRobloxIntervalInput Number, 1
+    Gui Add, UpDown, vRestartRobloxIntervalUpDown Range1-24, 1
+    Gui Add, Text, x350 y102 w130 h16 BackgroundTrans, % "hour(s) (Clears RAM)"
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x252 y40 w231 h90 vCreditsGroup2 -Theme +0x50000007, The Inspiration
-Gui Add, Picture, w60 h60 x259 y62, % mainDir "images\auryn.ico"
-Gui Font, s8 norm
-Gui Add, Text, x326 y59 w150 h68,% "Natro Macro, a macro for Bee Swarm Simulator has greatly inspired this project and has helped me create this project overall."
+    ; Private Server Link
+    Gui Add, Text, x290 y131 w100 h20 vPrivateServerInputHeader BackgroundTrans, Private Server Link:
+    Gui Add, Edit, x294 y148 w177 h20 vPrivateServerInput, % ""
 
-Gui Font, s10 w600
-Gui Add, GroupBox, x252 y130 w231 h80 vCreditsGroup3 -Theme +0x50000007, Other
-Gui Font, s9 norm
-Gui Add, Link, x268 y150 w200 h55, Join the <a href="https://discord.gg/DYUqwJchuV">Discord Server</a>! (Community)`n`nVisit the <a href="https://github.com/BuilderDolphin/dolphSol-Macro">GitHub</a>! (Updates + Versions)
+    ; Import 
+    Gui Add, Button, vImportSettingsButton gImportSettingsClick x317 y186 w130 h20, Import Settings
 
-Gui Show, % "w500 h254 x" clamp(options.WindowX,10,A_ScreenWidth-100) " y" clamp(options.WindowY,10,A_ScreenHeight-100), % "dolphSol Macro " version
+    ; credits tab
+    Gui Tab, 5
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x16 y40 w231 h133 vCreditsGroup -Theme +0x50000007, The Creator
+    Gui Add, Picture, w75 h75 x23 y62, % mainDir "images\pfp.png"
+    Gui Font, s12 w600
+    Gui Add, Text, x110 y57 w130 h22,BuilderDolphin
+    Gui Font, s8 norm italic
+    Gui Add, Text, x120 y78 w80 h18,(dolphin)
+    Gui Font, s8 norm
+    Gui Add, Text, x115 y95 w124 h40,"This was supposed to be a short project to learn AHK..."
+    Gui Font, s8 norm
+    Gui Add, Text, x28 y145 w200 h32 BackgroundTrans,% "More to come soon perhaps..."
+    Gui Add, Button, x28 y177 w206 h32 gMoreCreditsClick,% "More Credits"
 
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x252 y40 w231 h90 vCreditsGroup2 -Theme +0x50000007, The Inspiration
+    Gui Add, Picture, w60 h60 x259 y62, % mainDir "images\auryn.ico"
+    Gui Font, s8 norm
+    Gui Add, Text, x326 y59 w150 h68,% "Natro Macro, a macro for Bee Swarm Simulator has greatly inspired this project and has helped me create this project overall."
 
-; status bar
-Gui statusBar:New, AlwaysOnTop
-Gui Font, s10 norm
-Gui Add, Text, x5 y5 w210 h15 vStatusBarText, Status: Waiting...
+    Gui Font, s10 w600
+    Gui Add, GroupBox, x252 y130 w231 h80 vCreditsGroup3 -Theme +0x50000007, Other
+    Gui Font, s9 norm
+    Gui Add, Link, x268 y150 w200 h55, Join the <a href="https://discord.gg/DYUqwJchuV">Discord Server</a>! (Community)`n`nVisit the <a href="https://github.com/BuilderDolphin/dolphSol-Macro">GitHub</a>! (Updates + Versions)
 
+    ; extras tab
+    Gui Tab, 6
+    Gui Font, s10 w600
 
-Gui mainUI:Default
+    ; General
+    Gui Add, GroupBox, x16 y40 w467 h50 vGeneralEnhancementsGroup -Theme +0x50000007, General
+    Gui Font, s9 norm
+    Gui Add, CheckBox, gOCREnabledCheckBoxClick vOCREnabledCheckBox x32 y60 w400 h22 +0x2 Section, % " Enable OCR for Self-Correction (Requires English-US PC Language)"
+    Gui Add, Button, gOCRHelpClick vOCRHelpButton x457 y50 w23 h23, ?
 
+    Gui Add, Button, gShowBiomeSettings vBiomeButton x16 y100 w128, Configure Biomes
+    Gui Add, Button, gShowItemSchedulerSettings vSchedulerGUIButton x16 y+5 w128, Item Scheduler
+
+    Gui Add, Button, gUIHelpClick vUIHelpButton x380 y190 w100 h23, How can I tell?
+
+    ; Roblox UI style to determine Chat button position
+    Gui Font, s10 w600
+    Gui Add, Text, x400 y130, Roblox UI
+    Gui Font, s9 norm
+    
+    ; options["RobloxUpdatedUI"]
+    Gui Add, Radio, AltSubmit gGetRobloxVersion vRobloxUpdatedUIRadio1 x420 y150, Old
+    Gui Add, Radio, AltSubmit gGetRobloxVersion vRobloxUpdatedUIRadio2, New
+    GuiControl,, RobloxUpdatedUIRadio1, % (options["RobloxUpdatedUI"] = 1) ? 1 : 0
+    GuiControl,, RobloxUpdatedUIRadio2, % (options["RobloxUpdatedUI"] = 2) ? 1 : 0
+
+    Gui Show, % "w500 h254 x" clamp(options.WindowX,10,A_ScreenWidth-100) " y" clamp(options.WindowY,10,A_ScreenHeight-100), % "dolphSol Macro " version
+
+    ; status bar
+    Gui statusBar:New, +AlwaysOnTop -Caption
+    Gui Font, s10 norm
+    Gui Add, Text, x5 y5 w210 h15 vStatusBarText, Status: Waiting...
+
+    Gui mainUI:Default
+}
+CreateMainUI()
+
+; Create the Aura settings popup
+ShowAuraSettings() {
+    global ; Needed for GUI variables
+    Gui, AuraSettings:New, +AlwaysOnTop +LabelAuraGui
+    Gui Font, s10 w600
+    Gui Add, Text, x16 y10 w300 h30, Aura Webhook Toggles
+    Gui Font, s9 norm
+    Gui Add, Text, x16 y30 w300 h30, Uncheck to disable Discord notification
+
+    ; Calculate the number of items per column
+    itemsPerColumn := Ceil(auraNames.Length() / 2.0)
+
+    ; Initialize position variables
+    local startXPos := 16
+    local startYPos := 50
+    local xPos := startXPos
+    local yPos := startYPos
+    local columnCounter := 0
+    local columnWidth := 240
+
+    ; Sort names
+    sortedNames := {}
+    for k, v in auraNames
+        sortedNames[v] := v
+    auraNames := sortedNames
+
+    ; Create checkboxes for each aura
+    for _, auraName in auraNames {
+        ; Convert the aura name to a valid variable name
+        sAuraName := RegExReplace(auraName, "[^a-zA-Z0-9]+", "_") ; Replace with underscore
+        sAuraName := RegExReplace(sAuraName, "\_$", "") ; Remove any trailing underscore
+
+        try {
+            ; outputDebug, % "Adding checkbox for " auraName " (" sAuraName ") at x" xPos ", y" yPos
+            Gui Add, CheckBox, % "v" sAuraName "CheckBox x" xPos " y" yPos " w220 h20 +0x2 Checked"options["wh" . sAuraName], % auraName
+        } catch e {
+            logMessage("[ShowAuraSettings] Error adding checkbox for " auraName "(" sAuraName ") : " e.Message)
+        }
+        yPos += 25
+        columnCounter += 1
+
+        ; Adjust if more than one column is needed
+        if (columnCounter >= itemsPerColumn) {
+            columnCounter := 0
+            xPos += columnWidth  ; Move to the next column
+            yPos := startYPos
+        }
+    }
+    Gui Show, % "w500", Aura Settings
+}
+
+ShowAuraEquipSearch() {
+    global
+    Gui, AuraSearch:New, +AlwaysOnTop +LabelAuraSearchGui
+    Gui Font, s11 w300
+    Gui Add, Text, x16 y10 w300 h50, % "Enter aura name to be used for search.`nThe first result will be equipped so be specific."
+
+    ; No functionality yet
+    searchSpecialAurasState := options.SearchSpecialAuras ? "Checked" : ""
+    Gui Add, CheckBox, vSearchSpecialAurasCheckBox x200 y148 w300 h22 %searchSpecialAurasState% +Disabled, % "Search in Special Auras"
+
+    defaultAura := options.AutoEquipAura ? options.AutoEquipAura : "Quartz"
+    Gui Add, Edit, vAuraNameInput x8 y110 w382 h22, % defaultAura
+
+    Gui Add, Button, gSubmitAuraName x32 y144 w100 h30, Submit
+
+    Gui Show, % "w400 h190 x" clamp(options.WindowX,10,A_ScreenWidth-100) " y" clamp(options.WindowY,10,A_ScreenHeight-100), % "Auto Equip Aura"
+}
+
+applyAuraSettings() {
+    global auraNames, options
+
+    Gui AuraSettings:Default  ; Ensure we are in the context of AuraSettings GUI
+
+    ; Save aura settings with prefix
+    for _, auraName in auraNames {
+        sAuraName := RegExReplace(auraName, "[^a-zA-Z0-9]+", "_") ; Replace all non-alphanumeric characters with underscore
+        sAuraName := RegExReplace(sAuraName, "\_$", "") ; Remove any trailing underscore
+        
+        GuiControlGet, rValue,, %sAuraName%CheckBox
+        options["wh" . sAuraName] := rValue
+        ; logMessage("[applyAuraSettings] Updating Aura Setting: " auraName " - " sAuraName " - " options["wh" . sAuraName])
+    }
+}
+
+; Create the Biome settings popup
+ShowBiomeSettings() {
+    global ; Needed for GUI variables
+    Gui, BiomeSettings:New, +AlwaysOnTop +LabelBiomeGui
+    Gui Color, 0xDADADA
+    Gui Font, s10 w600
+    Gui Add, Text, x16 y10 w300 h30, Biome Alerts
+    Gui Font, s9 norm
+    Gui Add, Text, x16 y30 w300 h30, % "Message = Discord Message`n       Ping = Message + Ping User/Role"
+
+    col := 1
+    colW := 40 ; Spacing between name and dropdown (Biome in first column are mostly shorter)
+    yPos := 75
+
+    For i, biome in biomes {
+        if (i = 5) {
+            ; Start a new column
+            col := 2
+            colW := 60
+            yPos := 75
+        }
+
+        xPos := (col = 1) ? 16 : 175
+
+        Gui Add, Text, Section x%xPos% y%yPos% w%colW% h20, % biome ":"
+        Gui Add, DropDownList, % "x+m ys-2 w80 h20 R3 v" biome "DropDown", None||Message|Ping
+        GuiControl, ChooseString, %biome%DropDown, % options["Biome" . biome]
+
+        yPos += 25
+    }
+
+    Gui Show, , Biome Settings
+}
+
+applyBiomeSettings() {
+    global biomes, options
+
+    Gui BiomeSettings:Default  ; Ensure we are in the context of the correct GUI
+
+    ; Save settings with prefix
+    for index, biome in biomes {
+        GuiControlGet, rValue,, %biome%DropDown
+        options["Biome" . biome] := rValue
+        ; logMessage("[applyBiomeSettings] Updating Biome Setting: " biome " - " options["Biome" . biome])
+    }
+}
 
 global directValues := {"ObbyCheckBox":"DoingObby"
     ,"AzertyCheckBox":"AzertyLayout"
@@ -1770,20 +3112,27 @@ global directValues := {"ObbyCheckBox":"DoingObby"
     ,"CraftingIntervalUpDown":"CraftingInterval"
     ,"ItemCraftingCheckBox":"ItemCraftingEnabled"
     ,"InvScreenshotinterval":"ScreenshotInterval"
-    ,"CraftGildedCoinCheckBox":"CraftingGildedCoin"
     ,"PotionCraftingCheckBox":"PotionCraftingEnabled"
+    ,"PotionAutoAddCheckBox":"PotionAutoAddEnabled"
+    ,"PotionAutoAddIntervalUpDown":"PotionAutoAddInterval"
+    ,"OwnPrivateServerCheckBox":"InOwnPrivateServer"
     ,"ReconnectCheckBox":"ReconnectEnabled"
+    ,"RestartRobloxCheckBox":"RestartRobloxEnabled"
+    ,"RestartRobloxIntervalUpDown":"RestartRobloxInterval"
     ,"WebhookCheckBox":"WebhookEnabled"
     ,"WebhookInput":"WebhookLink"
     ,"WebhookImportantOnlyCheckBox":"WebhookImportantOnly"
     ,"WebhookRollImageCheckBox":"WebhookAuraRollImages"
     ,"WebhookUserIDInput":"DiscordUserID"
     ,"WebhookInventoryScreenshots":"InvScreenshotsEnabled"
-    ,"StatusBarCheckBox":"StatusBarEnabled"}
+    ,"StatusBarCheckBox":"StatusBarEnabled"
+    ,"SearchSpecialAurasCheckBox":"SearchSpecialAuras"
+    ,"ClaimDailyQuestsCheckBox":"ClaimDailyQuests"
+    ,"OCREnabledCheckBox":"OCREnabled"
+    ,"ShifterCheckBox":"Shifter"}
 
 global directNumValues := {"WebhookRollSendInput":"WebhookRollSendMinimum"
     ,"WebhookRollPingInput":"WebhookRollPingMinimum"}
-
 updateUIOptions(){
     for i,v in directValues {
         GuiControl,,%i%,% options[v]
@@ -1916,6 +3265,7 @@ handleImportSettings(){
 }
 
 handleWebhookEnableToggle(){
+    Gui mainUI:Default
     GuiControlGet, rValue,,WebhookCheckBox
 
     if (rValue){
@@ -1950,7 +3300,7 @@ getTimerDisplay(t){
     return formatNum(Floor(t/86400)) . ":" . formatNum(Floor(Mod(t,86400)/3600)) . ":" . formatNum(Floor(Mod(t,3600)/60)) . ":" . formatNum(Mod(t,60))
 }
 
-updateUI(){
+updateStats(){
     ; per 1s
     if (running){
         options.RunTime += 1
@@ -1967,9 +3317,10 @@ updateUI(){
         }
         statText .= v . ": " . value
     }
+    Gui mainUI:Default
     GuiControl, , StatsDisplay, % statText
 }
-updateUI()
+SetTimer, updateStats, 1000
 
 global statusColors := {"Starting Macro":3447003
     ,"Roblox Disconnected":15548997
@@ -1985,16 +3336,8 @@ global statusColors := {"Starting Macro":3447003
     ,"Macro Stopped":3447003
     ,"Beginning Crafting Cycle":1752220}
 
-global importantStatuses := {"Starting Macro":1
-    ,"Roblox Disconnected":1
-    ,"Reconnecting":1
-    ,"Reconnecting, Roblox Opened":1
-    ,"Reconnecting, Game Loaded":1
-    ,"Reconnect Complete":1
-    ,"Initializing":1
-    ,"Macro Stopped":1}
-
 updateStatus(newStatus){
+    logMessage("[updateStatus] New status: " newStatus)
     if (options.WebhookEnabled){
         FormatTime, fTime, , HH:mm:ss
         if (!options.WebhookImportantOnly || importantStatuses[newStatus]){
@@ -2003,8 +3346,6 @@ updateStatus(newStatus){
     }
     GuiControl,statusBar:,StatusBarText,% "Status: " newStatus
 }
-
-global selectingAutoEquip := 0
 
 startDim(clickthru := 0,topText := ""){
     removeDim()
@@ -2029,6 +3370,7 @@ removeDim(){
     Gui DimmerTop:Destroy
 }
 
+global selectingAutoEquip := 0
 startAutoEquipSelection(){
     if (selectingAutoEquip || macroStarted){
         return
@@ -2088,45 +3430,148 @@ handleRClick(){
     }
 }
 
-SetTimer, SecondTick, 1000
+global guis := Object(), timers := Object()
+
+Highlight(x="", y="", w="", h="", showTime=2000, color="Red", d=2) {
+    ; If no coordinates are provided, clear all highlights
+    if (x = "" || y = "" || w = "" || h = "") {
+        for key, timer in timers {
+            SetTimer, % timer, Off
+            Gui, %key%Top:Destroy
+            Gui, %key%Left:Destroy
+            Gui, %key%Bottom:Destroy
+            Gui, %key%Right:Destroy
+            guis.Delete(key)
+        }
+        timers := Object()
+        return
+    }
+
+    x := Floor(x)
+    y := Floor(y)
+    w := Floor(w)
+    h := Floor(h)
+
+    ; Create a new highlight
+    key := "Highlight" x y w h
+    Gui, %key%Top:New, +AlwaysOnTop -Caption +ToolWindow
+    Gui, %key%Top:Color, %color%
+    Gui, %key%Top:Show, x%x% y%y% w%w% h%d%
+
+    Gui, %key%Left:New, +AlwaysOnTop -Caption +ToolWindow
+    Gui, %key%Left:Color, %color%
+    Gui, %key%Left:Show, x%x% y%y% h%h% w%d%
+
+    Gui, %key%Bottom:New, +AlwaysOnTop -Caption +ToolWindow
+    Gui, %key%Bottom:Color, %color%
+    Gui, %key%Bottom:Show, % "x"x "y"(y+h-d) "w"w "h"d
+
+    Gui, %key%Right:New, +AlwaysOnTop -Caption +ToolWindow
+    Gui, %key%Right:Color, %color%
+    Gui, %key%Right:Show, % "x"(x+w-d) "y"y "w"d "h"h
+
+    ; Store the gui and set a timer to remove it
+    guis[key] := true
+    if (showTime > 0) {
+        timerKey := Func("RemoveHighlight").Bind(key)
+        timers[key] := timerKey
+        SetTimer, % timerKey, -%showTime%
+    }
+}
+
+RemoveHighlight(key) {
+    global guis, timers
+    Gui, %key%Top:Destroy
+    Gui, %key%Left:Destroy
+    Gui, %key%Bottom:Destroy
+    Gui, %key%Right:Destroy
+    guis.Delete(key)
+    timers.Delete(key)
+}
 
 startMacro(){
-    if (!canStart){
-        return
-    }
-    if (macroStarted) {
-        return
-    }
-    macroStarted := 1
+    logMessage("=====================================")
     updateStatus("Starting Macro")
+
+    ; Log system information and relevant variables
+    logMessage("System Information:")
+    logMessage("OS Version: " A_OSVersion, 1)
+    logMessage("AHK Version: " A_AhkVersion, 1)
+    logMessage("Screen Width: " A_ScreenWidth, 1)
+    logMessage("Screen Height: " A_ScreenHeight, 1)
+    logMessage("Screen DPI: " A_ScreenDPI, 1)
+    logMessage("Active Language: " getCurrentLanguage(), 1)
+
+    ; Log macro variables
+    logMessage("Macro Variables:")
+    logMessage("Version: " version, 1)
+    logMessage("OCR Enabled: " options.OCREnabled, 1)
+
+    if (!canStart){
+        logMessage("[startMacro] canStart is false, exiting...")
+        return
+    }
+    if (macroStarted && running) { ; Added extra running check to prevent exiting prematurely
+        logMessage("[startMacro] macroStarted is already true, exiting...")
+        return
+    }
+
+    macroStarted := 1
+    updateStatus("Macro Started")
 
     ; cancel any interfering stuff
     cancelAutoEquipSelection()
 
+    ; Save any changes made in the UI
     applyNewUIOptions()
     saveOptions()
 
     Gui, mainUI:+LastFoundExist
     WinSetTitle, % "dolphSol Macro " version " (Running)"
 
-    Run, % """" . A_AhkPath . """ """ mainDir . "lib\status.ahk"""
+    ; Run, % """" . A_AhkPath . """ """ mainDir . "lib\status.ahk"""
+    Run, *RunAs "%A_AhkPath%" /restart "%mainDir%lib\status.ahk"
 
     if (options.StatusBarEnabled){
-        Gui statusBar:Show, % "w220 h25 x" (A_ScreenWidth-300) " y50", dolphSol Status
+        Gui statusBar:Show, % "w220 h25 x" (A_ScreenWidth-300) " y100", dolphSol Status
     }
+    
+    ; Log game information and relevant variables
+    logMessage("Roblox Information:")
     
     robloxId := GetRobloxHWND()
     if (!robloxId){
+        logMessage("[startMacro] Roblox ID not found, attempting to reconnect...")
         attemptReconnect()
     }
 
+    ; Get window position and size
+    getRobloxPos(pX,pY,width,height)
+    logMessage("Window ID: " robloxId, 1)
+    logMessage("Width: " width, 1)
+    logMessage("Height: " height, 1)
+
+
+    options.LastRobloxRestart := getUnixTime() ; Reset so isn't immediately triggered
     running := 1
+    logMessage("") ; empty line for separation
+    logMessage("[startMacro] Starting main loop")
     WinActivate, ahk_id %robloxId%
     while running {
-        try mainLoop()
-        catch e
-            try webhookPost({embedContent: "what: " e.what ", file: " e.file
-        . ", line: " e.line ", message: " e.message ", extra: " e.extra,embedTitle: "Error Received",color: 15548997})
+        try {
+            mainLoop()
+        } catch e {
+            ewhat := e.what, efile := e.file, eline := e.line, emessage := e.message, eextra := e.extra
+            logMessage("[startMacro] Error: `nwhat: " ewhat "`nfile: " efile "`nline: " eline "`nmessage: " emessage "`nextra: " eextra)
+            try {
+                webhookPost({embedContent: "what: " e.what ", file: " e.file
+                . ", line: " e.line ", message: " e.message ", extra: " e.extra, embedTitle: "Error Received", color: 15548997})
+            }
+            MsgBox, 16,, % "Error!`n`nwhat: " e.what "`nfile: " e.file
+                . "`nline: " e.line "`nmessage: " e.message "`nextra: " e.extra
+            
+            running := 0
+        }
         
         Sleep, 2000
     }
@@ -2135,7 +3580,7 @@ startMacro(){
 if (!options.FirstTime){
     options.FirstTime := 1
     saveOptions()
-    MsgBox, 0,dolphSol Macro - Welcome, % "Welcome to dolphSol macro!`n`nIf this is your first time here, make sure to go through all of the tabs to make sure your settings are right.`n`nIf you are here from an update, remember that you can import all of your previous settings in the Settings menu.`n`nMake sure join the Discord server and check the GitHub page for the community and future updates, which can both be found in the Credits page. (Discord link is also in the bottom right corner)"
+    MsgBox, 0,dolphSol Macro - Welcome, % "Welcome to dolphSol macro!`n`nIf this is your first time here, go through all of the tabs to make sure your settings are right.`n`nIf you are here from an update, remember that you can import all of your previous settings in the Settings menu.`n`nJoin the Discord server and check the GitHub page for the community and future updates, which can both be found in the Credits page."
 }
 
 if (!options.WasRunning){
@@ -2150,21 +3595,36 @@ return
 ; button stuff
 
 StartClick:
+    if (running) {
+        return
+    }
     startMacro()
     return
 
 PauseClick:
-    MsgBox, 0,% "Pause",% "Please note that the pause feature isn't very stable currently. It is suggested to stop instead."
-    Pause
+    if (!running) {
+        return
+    }
+    ; MsgBox, 0,% "Pause",% "Please note that the pause feature isn't very stable currently. It is suggested to stop instead."
+    handlePause()
     return
 
 StopClick:
+    if (!running) {
+        return
+    }
     stop()
     Reload
     return
 
-AutoEquipSlotSelectClick:
-    startAutoEquipSelection()
+SubmitAuraName:
+    Gui, AuraSearch:Submit, NoHide
+    if (!ErrorLevel && auraName != "") {
+        options.AutoEquipAura := AuraNameInput
+        options.SearchSpecialAuras := SearchSpecialAurasCheckBox
+        saveOptions()
+        Gui, AuraSearch:Destroy
+    }
     return
 
 DiscordServerClick:
@@ -2187,10 +3647,63 @@ WebhookRollImageCheckBoxClick:
     }
     return
 
+GetRobloxVersion:
+    Gui, Submit, NoHide
+    options["RobloxUpdatedUI"] := (RobloxUpdatedUIRadio1 = 1) ? 1 : 2
+    return
+
+ShifterCheckBoxClick:
+    Gui mainUI:Default
+    GuiControlGet, v,, ShifterCheckBox
+    if (v){
+    MsgBox, 0, Important, % "Shifter mode has not been tested with a non vip account and does not currently have Obby capabilites."
+    }
+    return
+
+OCREnabledCheckBoxClick:
+    Gui mainUI:Default
+    GuiControlGet, v,, OCREnabledCheckBox
+    if (v) {
+        options.OCREnabled := 0
+        currentLanguage := getCurrentLanguage()
+        if (currentLanguage = "English") {
+            options.OCREnabled := 1
+        }
+        ocrLanguages := getOCRLanguages()
+        if (InStr(ocrLanguages, "en-US")) {
+            options.OCREnabled := 1
+        }
+
+        if (options.OCREnabled) { ; Confirm resolution settings
+            if (A_ScreenWidth <> 1920 || A_ScreenHeight <> 1080 || A_ScreenDPI <> 96) {
+                options.OCREnabled := 0
+                MsgBox, 0, OCR Error, % "A monitor resolution of 1920x1080 with a 100% scale is required for OCR at this time.`n"
+                                      . "We will continue working to support more configurations."
+            } else {
+                ; getRobloxPos(pX, pY, pW, pH)
+                ; if not (pW = 1920 && pH = 1080 && A_ScreenDPI = 96) { ; Disable if Roblox isnt in fullscreen
+                ;     MsgBox, 0, Another Error, % "Roblox must be in fullscreen to use OCR."
+                ;     options.OCREnabled := 0
+                ; } else {
+                ;     return
+                ; }
+            }
+        } else {
+            MsgBox, 0, OCR Language Error, % "Unable to use OCR. Please set your language to English-US in your PC settings and restart to enable OCR."
+        }
+        ; GuiControl, , OCREnabledCheckBox, 0
+    }
+    return
+
 MoreCreditsClick:
     creditText =
 (
 Development
+
+ v1.5.0+ Contributors
+  - Amraki (amraki)
+  - Stewart (unoriginalstew)
+  - Big thank you to these people, as well as everyone else who helped work on this version over the few months of my inactivity!
 
 - Assistant Developer - Stanley (stanleyrekt)
 - Path Contribution - sanji (sir.moxxi), Flash (drflash55)
@@ -2198,21 +3711,10 @@ Development
 
 Supporters (Donations)
 
-- @Bigman
-- @sir.moxxi (sanji)
-- @zrx
-- @dj_frost
-- @FlamePrince101 - Member
-- @jw
-- @Maz - Member
-- @dead_is4
-- @CorruptExpy_II
-- @Ami.n
-- @s.a.t.s
-- @UnamedWasp - Member
-- @JujuFRFX
-- @Xon67
-- @NightLT98 - Member
+- Bigman, sir.moxxi (sanji), @zrx, @dj_frost, @jw, dead_is4, CorruptExpy_II, Ami.n, JujuFRFX, Xon67, @nottheofficialblx, v2isballin, Luke_, a11xn, @ashkarti, da.cheese, Xander, Aki, .heavenlyy, 1vqs, xpersonie, @ItsLinkCraft, @l3m0n_0, churchuk, cookie
+
+ Members
+  - FlamePrince101, Maz, @s.a.t.s, UnamedWasp, NightLT98, DeclanPickle, Fantesium, Jirach1, notkenno
 
 Thank you to everyone who currently supports and uses the macro! You guys are amazing!
 )
@@ -2220,13 +3722,12 @@ Thank you to everyone who currently supports and uses the macro! You guys are am
     return
 
 ; help buttons
-
 ObbyHelpClick:
     MsgBox, 0, Obby, % "Section for attempting to complete the Obby on the map for the +30% luck buff every 2 minutes. If you have the VIP Gamepass, make sure to enable it in Settings.`n`nCheck For Obby Buff Effect - Checks your status effects upon completing the obby and attempts to find the buff. If it is missing, the macro will retry the obby one more time. Disable this if your macro keeps retrying the obby after completing it. The ObbyCompletes stat will only increase if this check is enabled.`n`nPLEASE NOTE: The macro's obby completion ability HIGHLY depends on a stable frame-rate, and will likely fail from any frame freezes. If your macro is unable to complete the obby at all, it is best to disable this option."
     return
 
 AutoEquipHelpClick:
-    MsgBox, 0, Auto Equip, % "Section for automatically equipping a specified aura every macro round. This is important for equipping auras without walk animations, which may interfere with the macro. This defaults to your first storage slot if not selected. Enabling this will close your chat window due to it possibly getting in the way of the storage button.`n`nUse the Select Storage Slot button to select a slot in your Aura Storage to automatically equip. Right click when selecting to cancel.`n`nThis feature is HIGHLY RECOMMENDED to be used on a non-animation aura for best optimization."
+    MsgBox, 0, Auto Equip, % "Section for automatically equipping a specified aura every macro round. This is important for equipping auras without walk animations, which may interfere with the macro.`n`nThis feature is HIGHLY RECOMMENDED to be used on a non-animation aura for best optimization."
     return
 
 CollectHelpClick:
@@ -2241,17 +3742,84 @@ RollDetectionHelpClick:
     MsgBox, 0, Roll Detection, % "Section for detecting rolled auras through the registered star color (if 10k+). Any 10k+ auras that can be sent will be sent to the webhook, with the option to ping if the rarity is above the minimum.`n`nFor minimum settings, the number determines the lowest possible rarity the webhook will send/ping for. Values of 0 will disable the option completely. Values under 10,000 will toggle all 1k+ rolls, due to them being near undetectable.`n`nAura Images can be toggled to show the wiki-based images of your rolled auras in the webhook. WARNING: After some testing, this has proven to show some lag, leading to some send delay issues. Use at your own risk!"
     return
 
-f1::startMacro()
-f2::Pause
-f3::
-    stop()
-    Reload
+OCRHelpClick:
+    MsgBox, 0, OCR, % "OCR allows the macro to respond to events instead of blindly pressing keys and moving the mouse. Currently requires Roblox to be ran at 1920x1080 resolution and 100% scale."
+	return
 
-~LButton::handleLClick()
-~RButton::handleRClick()
+UIHelpClick:
+    Gui, New 
+    Gui, Add, Picture, x20 y50, % mainDir "images\UIInformation.png" ; Change to the path of your image file
+    Gui, Show, AutoSize  ; Adjust the GUI window size to fit the image
+    return
 
+; gui close buttons
 mainUIGuiClose:
     stop(1)
+return
 
-SecondTick:
-updateUI()
+AuraGuiClose:
+    applyAuraSettings() ; Update options with the new aura settings
+    saveOptions()  ; Save the options to the config file
+    Gui, AuraSettings:Destroy
+return
+
+AuraSearchGuiClose:
+    saveOptions()
+    Gui, AuraSearch:Destroy
+return
+
+BiomeGuiClose:
+    applyBiomeSettings() ; Update options
+    saveOptions()  ; Save the options
+    Gui, BiomeSettings:Destroy
+return
+
+ItemSchedulerGuiClose:
+    SaveItemSchedulerSettings() ; Update options
+    saveOptions()  ; Save the options
+    Gui, ItemSchedulerSettings:Destroy
+return
+
+ClearToolTip:
+    ToolTip
+return
+
+; hotkeys
+#If !running
+    F1::startMacro()
+#If
+
+#If running || reconnecting
+    F2::handlePause()
+
+    F3::
+    stop()
+    Reload
+#If
+
+#If selectingAutoEquip
+~LButton::handleLClick()
+~RButton::handleRClick()
+#If
+
+; Disable keyboard control of macro GUI to avoid accidental changes
+#If WinActive("ahk_id" hGUI)
+    Up::
+    Down::
+    Left::
+    Right::
+    Space::
+    Tab::
+    Enter::Return
+#If
+
+F4::
+    Gui mainUI:Show
+    return
+
+F5:: ; For debugging/testing
+    disableAlignment := !disableAlignment
+    ToolTip, % disableAlignment ? "Initial Align Disabled" : "Initial Align Enabled"
+    SetTimer, ClearToolTip, -5000
+    return
+
