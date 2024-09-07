@@ -212,7 +212,8 @@ global options := {"DoingObby":1
     ,"CollectionLoops":0
 
     ; plus options
-    ,"RecordAura":0}
+    ,"RecordAura":0
+    ,"RecordAuraMinimum":100000}
 
 global privateServerPre := "https://www.roblox.com/games/15532962292/Sols-RNG?privateServerLinkCode="
 
@@ -2716,7 +2717,7 @@ mainLoop(){
         }
         if (!hasBuff)
         {
-            align()
+            ; align()
             updateStatus("Obby Failed, Retrying")
             lastObby := A_TickCount - obbyCooldown*1000
             obbyRun()
@@ -2757,7 +2758,6 @@ CreateMainUI() {
     }
 
     Gui mainUI: New, +hWndhGui
-    Gui Color, 0xDADADA
     Gui Add, Button, gStartClick vStartButton x8 y224 w80 h23 -Tabstop, F1 - Start
     Gui Add, Button, gPauseClick vPauseButton x96 y224 w80 h23 -Tabstop, F2 - Pause
     Gui Add, Button, gStopClick vStopButton x184 y224 w80 h23 -Tabstop, F3 - Stop
@@ -2765,7 +2765,7 @@ CreateMainUI() {
     Gui Font, s11 Norm, Segoe UI
     Gui Add, Picture, gDiscordServerClick w26 h20 x462 y226, % mainDir "images\discordIcon.png"
 
-    Gui Add, Tab3, vMainTabs x8 y8 w484 h210 +0x800000, Main|Crafting|Webhook|Settings|Credits|Extras|Plus
+    Gui Add, Tab3, vMainTabs x8 y8 w484 h210, Main|Crafting|Webhook|Settings|Credits|Advanced|Plus
 
     ; main tab
     Gui Tab, 1
@@ -2842,7 +2842,7 @@ CreateMainUI() {
     Gui Add, UpDown, vPotionAutoAddIntervalUpDown Range1-300, 10
     Gui Add, Text, ys wp w60 h35 BackgroundTrans, minutes
 
-    ; status tab
+    ; Webhook tab
     Gui Tab, 3
     Gui Font, s10 w600
     Gui Add, GroupBox, x16 y40 w130 h170 vStatsGroup -Theme +0x50000007, Stats
@@ -2932,17 +2932,17 @@ CreateMainUI() {
     Gui Add, Button, x28 y177 w206 h32 gMoreCreditsClick,% "More Credits"
 
     Gui Font, s10 w600
-    Gui Add, GroupBox, x252 y40 w231 h90 vCreditsGroup2 -Theme +0x50000007, The Inspiration
-    Gui Add, Picture, w60 h60 x259 y62, % mainDir "images\auryn.ico"
+    Gui Add, GroupBox, x252 y40 w231 h90 vCreditsGroup2 -Theme +0x50000007, Plus Creator
+    Gui Add, Picture, w60 h60 x259 y62, % mainDir "images\curiouspengu.png"
     Gui Font, s8 norm
-    Gui Add, Text, x326 y59 w150 h68,% "Natro Macro, a macro for Bee Swarm Simulator has greatly inspired this project and has helped me create this project overall."
+    Gui Add, Text, x326 y59 w150 h68,% "Hello, I cleaned up stuff and created all the plus features"
 
     Gui Font, s10 w600
     Gui Add, GroupBox, x252 y130 w231 h80 vCreditsGroup3 -Theme +0x50000007, Other
     Gui Font, s9 norm
     Gui Add, Link, x268 y150 w200 h55, Join the <a href="https://discord.gg/DYUqwJchuV">Discord Server</a>! (Community)`n`nVisit the <a href="https://github.com/BuilderDolphin/dolphSol-Macro">GitHub</a>! (Updates + Versions)
 
-    ; extras tab
+    ; advanced tab
     Gui Tab, 6
     Gui Font, s10 w600
 
@@ -2971,7 +2971,12 @@ CreateMainUI() {
     ; plus features
     Gui Tab, 7
     Gui Font, s10 w600
-    Gui Add, GroupBox, x16 y40 w467 h50 vRecordAuraGroup -Theme +0x50000007, Record Aura
+    Gui Add, GroupBox, x16 y40 w279 h170 vRecordAuraGroup -Theme +0x50000007, Record Aura
+    Gui Font, s9 norm
+    Gui Add, CheckBox, vRecordAuraCheckBox x32 y60 w238 h22 +0x2 Section, % " Record Aura Rolls using Xbox Game Bar"
+    Gui Add, Button, gRecordAuraHelp vRecordAuraHelpButton x267 y50 w23 h23, ?
+    Gui Add, Text, vRecordAuraMinimumHeader x25 y80 w110 h16 BackgroundTrans, % "Record Minimum:"
+    Gui Add, Edit, vRecordAuraMinimumInput x25 y95 w240 h18, 100000
 
 
 
@@ -3146,10 +3151,11 @@ global directValues := {"ObbyCheckBox":"DoingObby"
     ,"SearchSpecialAurasCheckBox":"SearchSpecialAuras"
     ,"ClaimDailyQuestsCheckBox":"ClaimDailyQuests"
     ,"OCREnabledCheckBox":"OCREnabled"
-    ,"ShifterCheckBox":"Shifter"}
+    ,"ShifterCheckBox":"Shifter"
+    ,"RecordAuraCheckBox":"RecordAura"}
 
 global directNumValues := {"WebhookRollSendInput":"WebhookRollSendMinimum"
-    ,"WebhookRollPingInput":"WebhookRollPingMinimum"}
+    ,"WebhookRollPingInput":"WebhookRollPingMinimum", "RecordAuraMinimumInput":"RecordAuraMinimum"}
 updateUIOptions(){
     for i,v in directValues {
         GuiControl,,%i%,% options[v]
@@ -3664,6 +3670,7 @@ WebhookRollImageCheckBoxClick:
     }
     return
 
+
 GetRobloxVersion:
     Gui, Submit, NoHide
     options["RobloxUpdatedUI"] := (RobloxUpdatedUIRadio1 = 1) ? 1 : 2
@@ -3768,6 +3775,11 @@ UIHelpClick:
     Gui, Add, Picture, x20 y50, % mainDir "images\UIInformation.png" ; Change to the path of your image file
     Gui, Show, AutoSize  ; Adjust the GUI window size to fit the image
     return
+
+RecordAuraHelp:
+    Gui mainUI:Default
+    MsgBox, 0, Recording Auras, % "Recording Auras uses Xbox Game Bar's record last 30 Seconds feature to record you rolling your auras. `n`nRecord Minimum`nYou can specify the minimum rarity of rolls to record. `nDefault = 100000"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
 
 ; gui close buttons
 mainUIGuiClose:
