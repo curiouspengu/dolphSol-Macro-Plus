@@ -1,5 +1,5 @@
 # dolphSol Macro Plus
- A macro for the Roblox game "Sol's RNG", including features such as obby completion and item collection. A work in progress - BuilderDolphin
+ A macro for the Roblox game "Sol's RNG", including features such as obby completion and item collection. A work in progress - BuilderDolphin\n
  This "Plus" version fixes many existing issues and introduces many community requested features. A word in progress - Curious Pengu
 
  ## Installation
