@@ -1,10 +1,10 @@
 # dolphSol Macro Plus
- A macro for the Roblox game "Sol's RNG", including features such as obby completion and item collection. A work in progress - BuilderDolphin
+ A macro for the Roblox game "Sol's RNG", including features such as obby completion and item collection. A work in progress - BuilderDolphin\
  This "Plus" version fixes many existing issues and introduces many community requested features. A word in progress - Curious Pengu
 
  ## Installation
  - First of all, you need to download [AutoHotKey v1.1](https://www.autohotkey.com/) (Not 2.0), and run the installer
- - Once complete, download the most recent version of dolphSol through the most recent [GitHub Release](https://github.com/BuilderDolphin/dolphSol-Macro/releases/latest) (Download source code ZIP)
+ - Once complete, download the most recent version of dolphSol through the most recent [GitHub Release](https://github.com/curiouspengu/dolphSol-Macro-Plus/releases/latest) (Download ZIP)
  - After downloading, extract the ZIP file to your desired directory
  - You can now run dolphSol through the Main.ahk file in the folder
 
@@ -20,5 +20,5 @@ dolphSol has a couple of different features it is capable of. These include:
 
 This "Plus" version (so far) includes
  - Aura Recordings 
-
- Discord Server: https://discord.gg/DYUqwJchuV
+People join the Discord server for issues. 
+Discord Server: https://discord.gg/DYUqwJchuV
