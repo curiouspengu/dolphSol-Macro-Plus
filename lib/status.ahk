@@ -835,11 +835,11 @@ rollDetection(bypass := 0,is1m := 0,starMap := 0,originalCorners := 0){
         handleRollPost(bypass,auraInfo,starMap,originalCorners)
         rareDisplaying := 0
     }
-    if (recordEnabled == 1 && RecordMinimum >= auraInfo.rarity)
+
+    if (recordEnabled == 1 && RecordMinimum <= auraInfo.rarity)
     {
         recordAura()
     }
-    
 }
 
 
